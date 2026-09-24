@@ -14,7 +14,14 @@ var config = new ConfigurationBuilder()
     .Build();
 
 var carpetaCorpus = Path.Combine(AppContext.BaseDirectory, config["TrainingSettings:CarpetaCorpusRespaldo"] ?? "../../../data/corpus");
-var carpetaCheckpoints = Path.Combine(AppContext.BaseDirectory, config["TrainingSettings:CarpetaCheckpoints"] ?? "checkpoints");
+
+// Si se configura explicitamente TrainingSettings:CarpetaCheckpoints, se usa esa
+// (relativa a la carpeta del binario). Si no, se guarda directo en la carpeta
+// model/ compartida del repo (la misma que lee la Api en InferenceService).
+var carpetaCheckpointsConfig = config["TrainingSettings:CarpetaCheckpoints"];
+var carpetaCheckpoints = carpetaCheckpointsConfig is not null
+    ? Path.Combine(AppContext.BaseDirectory, carpetaCheckpointsConfig)
+    : RepoPaths.CarpetaModelo();
 var vocabSize = config.GetValue<int>("TrainingSettings:TokenizerVocabSize", 8000);
 Directory.CreateDirectory(carpetaCheckpoints);
 
@@ -106,7 +113,7 @@ if (idsCompletos.Count < gptConfig.ContextLength + 1)
 }
 
 // ---------- 6. Entrenamiento ----------
-var pathCheckpoint = Path.Combine(carpetaCheckpoints, "gptmini_latest.pt");
+var pathCheckpoint = Path.Combine(carpetaCheckpoints, "gpt-mini.pt");
 var model = new GptMini(gptConfig);
 
 if (File.Exists(pathCheckpoint))

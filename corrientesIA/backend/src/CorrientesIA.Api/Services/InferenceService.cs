@@ -1,3 +1,4 @@
+using CorrientesIA.Data;
 using CorrientesIA.Training.Model;
 using CorrientesIA.Training.Tokenizer;
 
@@ -22,9 +23,12 @@ public class InferenceService
     {
         _logger = logger;
 
-        var carpetaCheckpoints = config["ModelSettings:CheckpointDir"] ?? "../CorrientesIA.Training/checkpoints";
+        // En Docker/produccion, ModelSettings:CheckpointDir viene seteado explicitamente
+        // (variable de entorno ModelSettings__CheckpointDir -> /app/model). En desarrollo
+        // local, si no esta seteado, se autodetecta la carpeta model/ del repo.
+        var carpetaCheckpoints = config["ModelSettings:CheckpointDir"] ?? RepoPaths.CarpetaModelo();
         var pathTokenizer = Path.Combine(carpetaCheckpoints, "tokenizer.json");
-        var pathModelo = Path.Combine(carpetaCheckpoints, "gptmini_latest.pt");
+        var pathModelo = Path.Combine(carpetaCheckpoints, "gpt-mini.pt");
 
         if (File.Exists(pathTokenizer) && File.Exists(pathModelo))
         {

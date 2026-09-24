@@ -21,8 +21,8 @@ services:
 
   api:
     build:
-      context: ./backend
-      dockerfile: src/CorrientesIA.Api/Dockerfile
+      context: .
+      dockerfile: backend/src/CorrientesIA.Api/Dockerfile
     container_name: corrientesia-api
     restart: unless-stopped
     depends_on:
