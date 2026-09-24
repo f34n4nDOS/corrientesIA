@@ -82,20 +82,36 @@ public class GptMini : Module<Tensor, Tensor>
     }
 }
 
-// Bloque transformer estandar: self-attention causal + MLP, con residuales y layernorm.
+// Bloque transformer estandar: self-attention causal (implementada a mano con
+// Linear + matmul, sin usar la clase MultiheadAttention de TorchSharp cuya
+// firma cambia entre versiones) + MLP, con residuales y layernorm.
 public class TransformerBlock : Module<Tensor, Tensor>
 {
     private readonly LayerNorm _ln1;
-    private readonly MultiheadAttention _attn;
+    private readonly Linear _qProj;
+    private readonly Linear _kProj;
+    private readonly Linear _vProj;
+    private readonly Linear _outProj;
+    private readonly Dropout _attnDropout;
     private readonly LayerNorm _ln2;
     private readonly Sequential _mlp;
     private readonly int _numHeads;
+    private readonly int _headDim;
+    private readonly int _embeddingDim;
 
     public TransformerBlock(GptMiniConfig cfg) : base(nameof(TransformerBlock))
     {
+        _embeddingDim = cfg.EmbeddingDim;
         _numHeads = cfg.NumHeads;
+        _headDim = cfg.EmbeddingDim / cfg.NumHeads;
+
         _ln1 = LayerNorm(cfg.EmbeddingDim);
-        _attn = MultiheadAttention(cfg.EmbeddingDim, cfg.NumHeads, dropout: cfg.Dropout, batchFirst: true);
+        _qProj = Linear(cfg.EmbeddingDim, cfg.EmbeddingDim);
+        _kProj = Linear(cfg.EmbeddingDim, cfg.EmbeddingDim);
+        _vProj = Linear(cfg.EmbeddingDim, cfg.EmbeddingDim);
+        _outProj = Linear(cfg.EmbeddingDim, cfg.EmbeddingDim);
+        _attnDropout = Dropout(cfg.Dropout);
+
         _ln2 = LayerNorm(cfg.EmbeddingDim);
         _mlp = Sequential(
             Linear(cfg.EmbeddingDim, 4 * cfg.EmbeddingDim),
@@ -108,14 +124,29 @@ public class TransformerBlock : Module<Tensor, Tensor>
 
     public override Tensor forward(Tensor x)
     {
+        var batch = x.shape[0];
         var seqLen = (int)x.shape[1];
+        var normed = _ln1.forward(x);
+
+        // proyecciones lineales y separacion en heads: (batch, seq, embed) -> (batch, heads, seq, headDim)
+        var q = _qProj.forward(normed).view(batch, seqLen, _numHeads, _headDim).transpose(1, 2);
+        var k = _kProj.forward(normed).view(batch, seqLen, _numHeads, _headDim).transpose(1, 2);
+        var v = _vProj.forward(normed).view(batch, seqLen, _numHeads, _headDim).transpose(1, 2);
+
+        // atencion escalada por producto punto: (batch, heads, seq, seq)
+        var scores = matmul(q, k.transpose(2, 3)) / Math.Sqrt(_headDim);
+
         // mascara causal: cada posicion solo puede atender a las anteriores (y a si misma)
         var causalMask = torch.triu(torch.ones(seqLen, seqLen), diagonal: 1).to_type(ScalarType.Bool);
+        scores = scores.masked_fill(causalMask, float.NegativeInfinity);
 
-        var normed = _ln1.forward(x);
-        var (attnOut, _) = _attn.forward(normed, normed, normed, attn_mask: causalMask);
+        var pesos = _attnDropout.forward(nn.functional.softmax(scores, dim: -1));
+
+        var attnOut = matmul(pesos, v); // (batch, heads, seq, headDim)
+        attnOut = attnOut.transpose(1, 2).contiguous().view(batch, seqLen, _embeddingDim);
+        attnOut = _outProj.forward(attnOut);
+
         x = x + attnOut;
-
         x = x + _mlp.forward(_ln2.forward(x));
         return x;
     }
