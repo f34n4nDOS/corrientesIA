@@ -32,6 +32,8 @@ services:
       ConnectionStrings__Default: "Server=mysql;Port=3306;Database=corrientesia;User=root;Password=changeme;"
     ports:
       - "5080:8080"
+    volumes:
+      - ./model:/app/checkpoints:ro
 
 volumes:
   mysql_data:

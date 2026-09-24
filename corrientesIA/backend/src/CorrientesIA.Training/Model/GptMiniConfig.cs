@@ -13,4 +13,6 @@ public class GptMiniConfig
     public int BatchSize { get; set; } = 32;
     public double LearningRate { get; set; } = 3e-4;
     public int Epochs { get; set; } = 20;
+
+    public int StepsPerEpoch { get; set; } = 100; // steps de entrenamiento con batches aleatorios por epoch
 }

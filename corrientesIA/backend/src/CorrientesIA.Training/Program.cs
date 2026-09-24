@@ -13,7 +13,8 @@ Console.WriteLine("=== CorrientesIA - GPT-mini ===");
 Console.WriteLine();
 
 var connectionString =
-    "Server=mysql;Port=3306;Database=corrientesia;User=root;Password=changeme;CharSet=utf8mb4;";
+    Environment.GetEnvironmentVariable("ConnectionStrings__Default")
+    ?? "Server=localhost;Port=3306;Database=corrientesia;User=root;Password=changeme;CharSet=utf8mb4;";
 
 
 var options = new DbContextOptionsBuilder<AppDbContext>()
@@ -278,49 +279,61 @@ Console.WriteLine(
     $"Tokens totales: " +
     $"{encoded.Length}");
 
-if (encoded.Length < 3)
+// Contexto efectivo: si el corpus es más chico que ContextLength,
+// lo acotamos para no pedir ventanas imposibles de armar.
+var effectiveContextLength =
+    Math.Min(
+        config.ContextLength,
+        encoded.Length - 2);
+
+if (effectiveContextLength < 8)
 {
     Console.WriteLine(
-        "No hay suficientes tokens " +
-        "para entrenar.");
+        "Corpus demasiado chico para entrenar " +
+        "con este ContextLength. Sumá más documentos " +
+        "o bajá ContextLength.");
     return;
 }
 
-var sequenceLength =
-    Math.Min(
-        config.ContextLength,
-        encoded.Length - 1);
-
 Console.WriteLine(
-    $"Longitud de secuencia: " +
-    $"{sequenceLength}");
+    $"Contexto efectivo: {effectiveContextLength}");
 
-var inputTokens = encoded
-    .Take(sequenceLength)
+var tokensLong = encoded
     .Select(x => (long)x)
     .ToArray();
 
-var targetTokens = encoded
-    .Skip(1)
-    .Take(sequenceLength)
-    .Select(x => (long)x)
-    .ToArray();
 
-using var input =
-    tensor(
-        inputTokens,
-        dtype: ScalarType.Int64)
-    .reshape(
-        1,
-        sequenceLength);
+// ============================================================
+// MUESTREO DE BATCHES ALEATORIOS
+// ============================================================
 
-using var targets =
-    tensor(
-        targetTokens,
-        dtype: ScalarType.Int64)
-    .reshape(
-        1,
-        sequenceLength);
+// En vez de entrenar siempre sobre la misma ventana fija,
+// en cada step tomamos `BatchSize` ventanas de `effectiveContextLength`
+// tokens arrancando en posiciones aleatorias del corpus completo.
+// Así el modelo termina viendo todo el corpus, no solo el principio.
+(Tensor input, Tensor target) MuestrearBatch(Random rng)
+{
+    var inputData = new long[config.BatchSize, effectiveContextLength];
+    var targetData = new long[config.BatchSize, effectiveContextLength];
+
+    for (var b = 0; b < config.BatchSize; b++)
+    {
+        var start = rng.Next(
+            0,
+            tokensLong.Length - effectiveContextLength - 1);
+
+        for (var t = 0; t < effectiveContextLength; t++)
+        {
+            inputData[b, t] = tokensLong[start + t];
+            targetData[b, t] = tokensLong[start + t + 1];
+        }
+    }
+
+    var inputTensor = tensor(inputData, dtype: ScalarType.Int64);
+    var targetTensor = tensor(targetData, dtype: ScalarType.Int64);
+
+    return (inputTensor, targetTensor);
+}
 
 
 // ============================================================
@@ -383,49 +396,63 @@ Console.WriteLine();
 Console.WriteLine(
     "=== ENTRENAMIENTO ===");
 
+var rng = new Random(42);
+var totalSteps = config.Epochs * config.StepsPerEpoch;
+
+Console.WriteLine(
+    $"Steps totales: {totalSteps} " +
+    $"({config.Epochs} epochs x {config.StepsPerEpoch} steps)");
+
 modelTrain.train();
 
-for (
-    var epoch = 1;
-    epoch <= config.Epochs;
-    epoch++)
+for (var step = 1; step <= totalSteps; step++)
 {
+    var (input, target) = MuestrearBatch(rng);
+
     optimizer.zero_grad();
 
     using var logits =
-        modelTrain.forward(
-            input);
+        modelTrain.forward(input);
 
     using var logitsFlat =
         logits.reshape(
-            sequenceLength,
+            config.BatchSize * effectiveContextLength,
             config.VocabSize);
 
-    using var targetsFlat =
-        targets.reshape(
-            sequenceLength);
+    using var targetFlat =
+        target.reshape(
+            config.BatchSize * effectiveContextLength);
 
     using var loss =
         functional.cross_entropy(
             logitsFlat,
-            targetsFlat);
+            targetFlat);
 
     loss.backward();
-
     optimizer.step();
 
-    var lossValue =
-        loss.item<float>();
+    input.Dispose();
+    target.Dispose();
 
-    Console.WriteLine(
-        $"Epoch {epoch,2}/" +
-        $"{config.Epochs} - " +
-        $"loss: {lossValue:F6}");
+    if (step % 10 == 0 || step == totalSteps)
+    {
+        Console.WriteLine(
+            $"Step {step,4}/{totalSteps} - " +
+            $"loss: {loss.item<float>():F6}");
+    }
+
+    if (step % 200 == 0)
+    {
+        modelTrain.save(modelPath);
+        Console.WriteLine(
+            $"  Checkpoint intermedio guardado " +
+            $"({step} steps).");
+    }
 }
 
 
 // ============================================================
-// CHECKPOINT
+// CHECKPOINT FINAL
 // ============================================================
 
 Console.WriteLine();
@@ -436,8 +463,7 @@ modelTrain.save(
     modelPath);
 
 Console.WriteLine(
-    $"Modelo guardado: " +
-    $"{modelPath}");
+    $"Modelo guardado: {modelPath}");
 
 
 // ============================================================
@@ -456,9 +482,12 @@ loadedModel.load(
 
 loadedModel.eval();
 
+var (testInput, _) = MuestrearBatch(rng);
+
 using var loadedLogits =
-    loadedModel.forward(
-        input);
+    loadedModel.forward(testInput);
+
+testInput.Dispose();
 
 Console.WriteLine(
     "Modelo cargado correctamente.");
