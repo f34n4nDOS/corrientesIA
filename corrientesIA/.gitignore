@@ -1,0 +1,17 @@
+# .NET
+bin/
+obj/
+*.user
+backend/src/CorrientesIA.Training/checkpoints/
+
+# Node / Angular
+node_modules/
+dist/
+.angular/
+
+# Docker / env
+.env
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
