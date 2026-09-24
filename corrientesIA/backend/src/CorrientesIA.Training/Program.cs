@@ -1,509 +1,185 @@
-﻿using CorrientesIA.Data;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using CorrientesIA.Data;
 using CorrientesIA.Training.Model;
 using CorrientesIA.Training.Tokenizer;
-using Microsoft.EntityFrameworkCore;
 using TorchSharp;
 using static TorchSharp.torch;
-using static TorchSharp.torch.nn;
 
-Console.OutputEncoding = System.Text.Encoding.UTF8;
-Console.InputEncoding = System.Text.Encoding.UTF8;
+Console.WriteLine("=== CorrientesIA - Entrenamiento ===\n");
 
-Console.WriteLine("=== CorrientesIA - GPT-mini ===");
-Console.WriteLine();
+var config = new ConfigurationBuilder()
+    .SetBasePath(AppContext.BaseDirectory)
+    .AddJsonFile("appsettings.json", optional: false)
+    .Build();
 
-var connectionString =
-    Environment.GetEnvironmentVariable("ConnectionStrings__Default")
-    ?? "Server=localhost;Port=3306;Database=corrientesia;User=root;Password=changeme;CharSet=utf8mb4;";
+var carpetaCorpus = Path.Combine(AppContext.BaseDirectory, config["TrainingSettings:CarpetaCorpusRespaldo"] ?? "../../../data/corpus");
+var carpetaCheckpoints = Path.Combine(AppContext.BaseDirectory, config["TrainingSettings:CarpetaCheckpoints"] ?? "checkpoints");
+var vocabSize = config.GetValue<int>("TrainingSettings:TokenizerVocabSize", 8000);
+Directory.CreateDirectory(carpetaCheckpoints);
 
+// ---------- 1. Cargar corpus: primero intenta MySQL, si no hay, usa el respaldo en disco ----------
+var textos = new List<string>();
 
-var options = new DbContextOptionsBuilder<AppDbContext>()
-    .UseMySql(
-        connectionString,
-        ServerVersion.AutoDetect(connectionString))
-    .Options;
-
-await using var db = new AppDbContext(options);
-
-var documentos = await db.CorpusDocumentos
-    .Where(x => !string.IsNullOrWhiteSpace(x.Contenido))
-    .OrderBy(x => x.Id)
-    .ToListAsync();
-
-Console.WriteLine(
-    $"Documentos encontrados: {documentos.Count}");
-
-if (documentos.Count == 0)
+try
 {
-    Console.WriteLine(
-        "No hay documentos para entrenar.");
-    return;
+    var connStr = config.GetConnectionString("Default");
+    var options = new DbContextOptionsBuilder<AppDbContext>()
+        .UseMySql(connStr, ServerVersion.AutoDetect(connStr))
+        .Options;
+    using var db = new AppDbContext(options);
+    await db.Database.CanConnectAsync();
+
+    textos = await db.CorpusDocumentos.Select(d => d.Contenido).ToListAsync();
+    Console.WriteLine($"Corpus cargado desde MySQL: {textos.Count} documentos.");
+}
+catch
+{
+    Console.WriteLine("MySQL no disponible, busco el respaldo en disco del scraper...");
 }
 
-foreach (var documento in documentos)
+if (textos.Count == 0 && Directory.Exists(carpetaCorpus))
 {
-    Console.WriteLine(
-        $"  [{documento.Id}] {documento.Titulo} - " +
-        $"{documento.Contenido.Length} caracteres");
-}
-
-var config = new GptMiniConfig
-{
-    Epochs = 20,
-    LearningRate = 3e-4,
-    BatchSize = 1
-};
-
-var outputDirectory = Path.Combine(
-    AppContext.BaseDirectory,
-    "checkpoints");
-
-Directory.CreateDirectory(
-    outputDirectory);
-
-var tokenizerPath = Path.Combine(
-    outputDirectory,
-    "tokenizer.json");
-
-var modelPath = Path.Combine(
-    outputDirectory,
-    "gpt-mini.pt");
-
-var generateMode = args.Contains(
-    "--generate");
-
-
-// ============================================================
-// MODO GENERACIÓN
-// ============================================================
-
-if (generateMode)
-{
-    Console.WriteLine();
-    Console.WriteLine(
-        "=== GENERACIÓN GPT-mini ===");
-
-    if (!File.Exists(tokenizerPath))
-    {
-        Console.WriteLine(
-            $"No existe el tokenizer: {tokenizerPath}");
-        return;
-    }
-
-    if (!File.Exists(modelPath))
-    {
-        Console.WriteLine(
-            $"No existe el modelo: {modelPath}");
-        return;
-    }
-
-    Console.WriteLine(
-        "Cargando tokenizer...");
-
-    var tokenizer = BpeTokenizer.Load(
-        tokenizerPath);
-
-    Console.WriteLine(
-        $"Tokenizer cargado: " +
-        $"{tokenizer.Vocab.Count} tokens");
-
-    Console.WriteLine(
-        "Cargando modelo...");
-
-    using var model =
-        new GptMini(config);
-
-    model.load(modelPath);
-    model.eval();
-
-    Console.WriteLine(
-        "Modelo cargado correctamente.");
-
-    Console.WriteLine();
-    Console.WriteLine(
-        "=== GENERACIÓN ===");
-
-    var prompt = "Corrientes es";
-
-    var promptTokens = tokenizer
-        .Encode(prompt)
-        .ToArray();
-
-    if (promptTokens.Length == 0)
-    {
-        Console.WriteLine(
-            "El prompt no produjo tokens.");
-        return;
-    }
-
-    var generatedIds = promptTokens
-        .Select(x => (long)x)
+    textos = Directory.GetFiles(carpetaCorpus, "*.txt")
+        .Select(File.ReadAllText)
         .ToList();
+    Console.WriteLine($"Corpus cargado desde disco ({carpetaCorpus}): {textos.Count} archivos.");
+}
 
-    Console.WriteLine(
-        $"Prompt: {prompt}");
-
-    Console.WriteLine(
-        $"Tokens iniciales: " +
-        $"{generatedIds.Count}");
-
-    const int maxNewTokens = 30;
-
-    // Temperatura:
-    // 1.0 = distribución original
-    // < 1.0 = más conservador
-    // > 1.0 = más variado
-    const double temperature = 0.8;
-
-    for (
-        var step = 0;
-        step < maxNewTokens;
-        step++)
-    {
-        var currentLength =
-            generatedIds.Count;
-
-        if (currentLength >=
-            config.ContextLength)
-        {
-            break;
-        }
-
-        using var currentInput =
-            torch.tensor(
-                generatedIds.ToArray(),
-                dtype: ScalarType.Int64)
-            .reshape(
-                1,
-                currentLength);
-
-        using var logits =
-            model.forward(
-                currentInput);
-
-        using var lastLogits =
-            logits[0, -1];
-
-        using var scaledLogits =
-            lastLogits / temperature;
-
-        using var probabilities =
-            functional.softmax(
-                scaledLogits,
-                dim: 0);
-
-        using var sampled =
-            torch.multinomial(
-                probabilities,
-                1);
-
-        var nextToken =
-            sampled.item<long>();
-
-        generatedIds.Add(
-            nextToken);
-    }
-
-    var result =
-        tokenizer.Decode(
-            generatedIds
-                .Select(x => (int)x)
-                .ToArray());
-
-    Console.WriteLine();
-    Console.WriteLine(
-        "=== RESULTADO ===");
-
-    Console.WriteLine(
-        result);
-
-    Console.WriteLine();
-    Console.WriteLine(
-        $"Tokens generados: " +
-        $"{generatedIds.Count - promptTokens.Length}");
-
+if (textos.Count == 0)
+{
+    Console.WriteLine("\nNo hay corpus todavia. Corre primero el proyecto CorrientesIA.Scraper:");
+    Console.WriteLine("  dotnet run --project ../CorrientesIA.Scraper");
     return;
 }
 
+// ---------- 2. Entrenar (o cargar) el tokenizador BPE ----------
+var pathTokenizer = Path.Combine(carpetaCheckpoints, "tokenizer.json");
+BpeTokenizer tokenizer;
 
-// ============================================================
-// ENTRENAMIENTO
-// ============================================================
-
-Console.WriteLine();
-Console.WriteLine(
-    "=== ENTRENAMIENTO GPT-mini ===");
-
-var corpus = documentos
-    .Select(x =>
-        $"{x.Titulo}\n{x.Contenido}")
-    .ToList();
-
-
-// ============================================================
-// TOKENIZER
-// ============================================================
-
-Console.WriteLine();
-Console.WriteLine(
-    "=== TOKENIZER ===");
-
-var tokenizerTrain =
-    new BpeTokenizer();
-
-tokenizerTrain.Train(
-    corpus,
-    config.VocabSize);
-
-Console.WriteLine(
-    $"Vocabulario: " +
-    $"{tokenizerTrain.Vocab.Count}");
-
-tokenizerTrain.Save(
-    tokenizerPath);
-
-Console.WriteLine(
-    $"Tokenizer guardado: " +
-    $"{tokenizerPath}");
-
-var textoCorpus =
-    string.Join(
-        "\n\n",
-        corpus);
-
-var encoded =
-    tokenizerTrain.Encode(
-        textoCorpus);
-
-Console.WriteLine(
-    $"Tokens totales: " +
-    $"{encoded.Length}");
-
-// Contexto efectivo: si el corpus es más chico que ContextLength,
-// lo acotamos para no pedir ventanas imposibles de armar.
-var effectiveContextLength =
-    Math.Min(
-        config.ContextLength,
-        encoded.Length - 2);
-
-if (effectiveContextLength < 8)
+if (File.Exists(pathTokenizer))
 {
-    Console.WriteLine(
-        "Corpus demasiado chico para entrenar " +
-        "con este ContextLength. Sumá más documentos " +
-        "o bajá ContextLength.");
+    Console.WriteLine($"\nTokenizador ya existe en {pathTokenizer}, lo cargo.");
+    tokenizer = BpeTokenizer.Load(pathTokenizer);
+}
+else
+{
+    Console.WriteLine($"\nEntrenando tokenizador BPE (vocabSize={vocabSize}) sobre {textos.Count} documentos...");
+    tokenizer = new BpeTokenizer();
+    tokenizer.Train(textos, vocabSize);
+    tokenizer.Save(pathTokenizer);
+    Console.WriteLine($"Tokenizador entrenado y guardado en {pathTokenizer}. Vocabulario final: {tokenizer.Vocab.Count} tokens.");
+}
+
+// ---------- 3. Prueba rapida: codificar/decodificar una frase de ejemplo ----------
+var ejemplo = "Los Esteros del Ibera son una reserva natural de la provincia de Corrientes.";
+var ids = tokenizer.Encode(ejemplo);
+var reconstruido = tokenizer.Decode(ids);
+
+Console.WriteLine("\n--- Prueba del tokenizador ---");
+Console.WriteLine($"Original:      {ejemplo}");
+Console.WriteLine($"Tokens (ids):  [{string.Join(", ", ids.Take(20))}{(ids.Length > 20 ? ", ..." : "")}] ({ids.Length} tokens)");
+Console.WriteLine($"Reconstruido:  {reconstruido}");
+
+// ---------- 4. Arquitectura del modelo ----------
+var gptConfig = new GptMiniConfig { VocabSize = tokenizer.Vocab.Count };
+Console.WriteLine($"\nGptMiniConfig listo -> vocab: {gptConfig.VocabSize}, capas: {gptConfig.NumLayers}, " +
+                   $"dim: {gptConfig.EmbeddingDim}, heads: {gptConfig.NumHeads}, contexto: {gptConfig.ContextLength}");
+
+// ---------- 5. Tokenizar el corpus completo en una sola secuencia larga ----------
+Console.WriteLine("\nTokenizando corpus completo para entrenamiento...");
+var eosId = (long)tokenizer.Vocab[BpeTokenizer.EosToken];
+var idsCompletos = new List<long>();
+foreach (var texto in textos)
+{
+    idsCompletos.AddRange(tokenizer.Encode(texto).Select(i => (long)i));
+    idsCompletos.Add(eosId);
+}
+Console.WriteLine($"Corpus tokenizado: {idsCompletos.Count} tokens totales.");
+
+if (idsCompletos.Count < gptConfig.ContextLength + 1)
+{
+    Console.WriteLine("\nCorpus demasiado chico para el contexto configurado " +
+                       $"(hacen falta al menos {gptConfig.ContextLength + 1} tokens). " +
+                       "Agrega mas fuentes en CorrientesIA.Scraper/fuentes.json y volve a correr el scraper.");
     return;
 }
 
-Console.WriteLine(
-    $"Contexto efectivo: {effectiveContextLength}");
+// ---------- 6. Entrenamiento ----------
+var pathCheckpoint = Path.Combine(carpetaCheckpoints, "gptmini_latest.pt");
+var model = new GptMini(gptConfig);
 
-var tokensLong = encoded
-    .Select(x => (long)x)
-    .ToArray();
-
-
-// ============================================================
-// MUESTREO DE BATCHES ALEATORIOS
-// ============================================================
-
-// En vez de entrenar siempre sobre la misma ventana fija,
-// en cada step tomamos `BatchSize` ventanas de `effectiveContextLength`
-// tokens arrancando en posiciones aleatorias del corpus completo.
-// Así el modelo termina viendo todo el corpus, no solo el principio.
-(Tensor input, Tensor target) MuestrearBatch(Random rng)
+if (File.Exists(pathCheckpoint))
 {
-    var inputData = new long[config.BatchSize, effectiveContextLength];
-    var targetData = new long[config.BatchSize, effectiveContextLength];
+    Console.WriteLine($"\nCheckpoint existente en {pathCheckpoint}, cargo pesos y sigo entrenando desde ahi.");
+    model.load(pathCheckpoint);
+}
 
-    for (var b = 0; b < config.BatchSize; b++)
+Console.WriteLine($"\nEntrenando {gptConfig.Epochs} epocas (batch={gptConfig.BatchSize}, lr={gptConfig.LearningRate})...\n");
+Entrenar(model, idsCompletos, gptConfig);
+
+model.save(pathCheckpoint);
+Console.WriteLine($"\nModelo guardado en {pathCheckpoint}");
+
+// ---------- 7. Prueba de generacion con el modelo recien entrenado ----------
+Console.WriteLine("\n--- Prueba de generacion ---");
+var promptPrueba = "Los Esteros del Ibera";
+var promptIds = tokenizer.Encode(promptPrueba).Select(i => (long)i).ToArray();
+var generado = model.Generate(promptIds, maxNewTokens: 40, contextLength: gptConfig.ContextLength, temperature: 0.8, eosId: eosId);
+var textoGenerado = tokenizer.Decode(generado.Select(i => (int)i).ToArray());
+Console.WriteLine($"Prompt:    {promptPrueba}");
+Console.WriteLine($"Generado:  {textoGenerado}");
+
+// ---------- funciones locales ----------
+
+static void Entrenar(GptMini model, List<long> corpusIds, GptMiniConfig cfg)
+{
+    var optimizer = optim.Adam(model.parameters(), lr: cfg.LearningRate);
+    var lossFn = nn.CrossEntropyLoss();
+    var rng = new Random(42);
+
+    // limitamos pasos por epoca para que un entrenamiento local en CPU
+    // termine en tiempos razonables; se puede subir una vez que ande bien.
+    var pasosPorEpoca = Math.Min(200, Math.Max(1, (corpusIds.Count - cfg.ContextLength - 1) / cfg.BatchSize));
+
+    model.train();
+
+    for (int epoca = 1; epoca <= cfg.Epochs; epoca++)
     {
-        var start = rng.Next(
-            0,
-            tokensLong.Length - effectiveContextLength - 1);
+        double perdidaAcumulada = 0;
 
-        for (var t = 0; t < effectiveContextLength; t++)
+        for (int paso = 0; paso < pasosPorEpoca; paso++)
         {
-            inputData[b, t] = tokensLong[start + t];
-            targetData[b, t] = tokensLong[start + t + 1];
+            var (inputs, targets) = MuestrearBatch(corpusIds, cfg, rng);
+
+            optimizer.zero_grad();
+            var logits = model.forward(inputs); // (batch, ctx, vocab)
+            var loss = lossFn.forward(logits.reshape(-1, cfg.VocabSize), targets.reshape(-1));
+
+            loss.backward();
+            optimizer.step();
+
+            perdidaAcumulada += loss.item<float>();
+        }
+
+        Console.WriteLine($"  Epoca {epoca}/{cfg.Epochs} - loss promedio: {perdidaAcumulada / pasosPorEpoca:F4}");
+    }
+}
+
+static (Tensor inputs, Tensor targets) MuestrearBatch(List<long> corpusIds, GptMiniConfig cfg, Random rng)
+{
+    var inputsData = new long[cfg.BatchSize, cfg.ContextLength];
+    var targetsData = new long[cfg.BatchSize, cfg.ContextLength];
+
+    for (int b = 0; b < cfg.BatchSize; b++)
+    {
+        var inicio = rng.Next(0, corpusIds.Count - cfg.ContextLength - 1);
+        for (int t = 0; t < cfg.ContextLength; t++)
+        {
+            inputsData[b, t] = corpusIds[inicio + t];
+            targetsData[b, t] = corpusIds[inicio + t + 1];
         }
     }
 
-    var inputTensor = tensor(inputData, dtype: ScalarType.Int64);
-    var targetTensor = tensor(targetData, dtype: ScalarType.Int64);
-
-    return (inputTensor, targetTensor);
+    return (tensor(inputsData), tensor(targetsData));
 }
-
-
-// ============================================================
-// MODELO
-// ============================================================
-
-Console.WriteLine();
-Console.WriteLine(
-    "=== MODELO ===");
-
-using var modelTrain =
-    new GptMini(config);
-
-Console.WriteLine(
-    $"Capas: {config.NumLayers}");
-
-Console.WriteLine(
-    $"Embedding: " +
-    $"{config.EmbeddingDim}");
-
-Console.WriteLine(
-    $"Heads: " +
-    $"{config.NumHeads}");
-
-Console.WriteLine(
-    $"Vocabulario: " +
-    $"{config.VocabSize}");
-
-
-// ============================================================
-// OPTIMIZADOR
-// ============================================================
-
-Console.WriteLine();
-Console.WriteLine(
-    "=== OPTIMIZADOR ===");
-
-var parameters =
-    modelTrain.parameters();
-
-Console.WriteLine(
-    $"Parámetros: " +
-    $"{parameters.Count()}");
-
-using var optimizer =
-    optim.Adam(
-        parameters,
-        lr: config.LearningRate);
-
-Console.WriteLine(
-    $"Learning rate: " +
-    $"{config.LearningRate}");
-
-
-// ============================================================
-// ENTRENAMIENTO
-// ============================================================
-
-Console.WriteLine();
-Console.WriteLine(
-    "=== ENTRENAMIENTO ===");
-
-var rng = new Random(42);
-var totalSteps = config.Epochs * config.StepsPerEpoch;
-
-Console.WriteLine(
-    $"Steps totales: {totalSteps} " +
-    $"({config.Epochs} epochs x {config.StepsPerEpoch} steps)");
-
-modelTrain.train();
-
-for (var step = 1; step <= totalSteps; step++)
-{
-    var (input, target) = MuestrearBatch(rng);
-
-    optimizer.zero_grad();
-
-    using var logits =
-        modelTrain.forward(input);
-
-    using var logitsFlat =
-        logits.reshape(
-            config.BatchSize * effectiveContextLength,
-            config.VocabSize);
-
-    using var targetFlat =
-        target.reshape(
-            config.BatchSize * effectiveContextLength);
-
-    using var loss =
-        functional.cross_entropy(
-            logitsFlat,
-            targetFlat);
-
-    loss.backward();
-    optimizer.step();
-
-    input.Dispose();
-    target.Dispose();
-
-    if (step % 10 == 0 || step == totalSteps)
-    {
-        Console.WriteLine(
-            $"Step {step,4}/{totalSteps} - " +
-            $"loss: {loss.item<float>():F6}");
-    }
-
-    if (step % 200 == 0)
-    {
-        modelTrain.save(modelPath);
-        Console.WriteLine(
-            $"  Checkpoint intermedio guardado " +
-            $"({step} steps).");
-    }
-}
-
-
-// ============================================================
-// CHECKPOINT FINAL
-// ============================================================
-
-Console.WriteLine();
-Console.WriteLine(
-    "=== CHECKPOINT ===");
-
-modelTrain.save(
-    modelPath);
-
-Console.WriteLine(
-    $"Modelo guardado: {modelPath}");
-
-
-// ============================================================
-// PRUEBA DE CARGA
-// ============================================================
-
-Console.WriteLine();
-Console.WriteLine(
-    "=== PRUEBA DE CARGA ===");
-
-using var loadedModel =
-    new GptMini(config);
-
-loadedModel.load(
-    modelPath);
-
-loadedModel.eval();
-
-var (testInput, _) = MuestrearBatch(rng);
-
-using var loadedLogits =
-    loadedModel.forward(testInput);
-
-testInput.Dispose();
-
-Console.WriteLine(
-    "Modelo cargado correctamente.");
-
-Console.WriteLine(
-    $"Logits cargados: " +
-    $"[{loadedLogits.shape[0]}, " +
-    $"{loadedLogits.shape[1]}, " +
-    $"{loadedLogits.shape[2]}]");
-
-Console.WriteLine();
-Console.WriteLine(
-    "======================================");
-
-Console.WriteLine(
-    "CHECKPOINT OK");
-
-Console.WriteLine(
-    "======================================");

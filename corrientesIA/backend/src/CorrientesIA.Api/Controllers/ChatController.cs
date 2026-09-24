@@ -25,7 +25,13 @@ public class ChatController : ControllerBase
         if (string.IsNullOrWhiteSpace(request.Mensaje))
             return BadRequest("El mensaje no puede estar vacio.");
 
-        var respuesta = await _inference.GenerarRespuestaAsync(request.Mensaje);
-        return Ok(new ChatResponse(respuesta));
+        var respuestaModelo = await _inference.GenerarRespuestaAsync(request.Mensaje);
+        var datoVerificado = await _grounding.BuscarPorPalabrasClaveAsync(request.Mensaje);
+
+        var respuestaFinal = datoVerificado is null
+            ? respuestaModelo
+            : $"{respuestaModelo}\n\n📍 Dato verificado: {datoVerificado}";
+
+        return Ok(new ChatResponse(respuestaFinal));
     }
 }
