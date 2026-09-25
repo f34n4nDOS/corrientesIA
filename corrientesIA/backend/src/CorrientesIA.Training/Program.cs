@@ -147,10 +147,8 @@ var pruebaIds = tokenizer.Encode(pruebaTexto)
     .Select(i => (long)i)
     .ToArray();
 
-var pruebaInputs = tensor(new long[,]
-{
-    pruebaIds
-});
+var pruebaInputs = tensor(pruebaIds).reshape(1, pruebaIds.Length);
+
 
 var pruebaTargetsData = new long[1, pruebaIds.Length];
 
