@@ -81,7 +81,37 @@ Console.WriteLine("========================================");
         var generado = _model.Generate(promptIds, MaxNewTokens, ContextLength, Temperature, eosId);
         var soloGenerado = generado.Skip(promptIds.Length).Select(i => (int)i).ToArray();
 
-        var texto = _tokenizer.Decode(soloGenerado);
-        return Task.FromResult(string.IsNullOrWhiteSpace(texto) ? "(el modelo no genero texto util para esa consulta)" : texto);
+                var texto = _tokenizer.Decode(soloGenerado);
+        if (string.IsNullOrWhiteSpace(texto))
+            return Task.FromResult("(el modelo no genero texto util para esa consulta)");
+
+        return Task.FromResult(LimpiarRespuesta(texto));
     }
+
+    private static string LimpiarRespuesta(string texto)
+    {
+        // Saca signos de puntuación sueltos al principio (". ", ", ", etc.)
+        texto = System.Text.RegularExpressions.Regex.Replace(texto, @"^[\s.,;:!?]+", "");
+
+        // Saca espacios antes de puntuación.
+        texto = System.Text.RegularExpressions.Regex.Replace(texto, @"\s+([,.;:!?])", "$1");
+
+        // Colapsa espacios múltiples.
+        texto = System.Text.RegularExpressions.Regex.Replace(texto, @"\s{2,}", " ").Trim();
+
+        if (texto.Length == 0)
+            return texto;
+
+        // Capitaliza la primera letra.
+        texto = char.ToUpperInvariant(texto[0]) + texto[1..];
+
+        // Corta en el último punto/exclamación/interrogación, para no terminar
+        // a mitad de palabra si el límite de tokens interrumpió la oración.
+        var ultimoCierre = texto.LastIndexOfAny(new[] { '.', '!', '?' });
+        if (ultimoCierre > 10)
+            texto = texto[..(ultimoCierre + 1)];
+
+        return texto;
+    }
+    
 }
