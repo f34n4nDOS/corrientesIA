@@ -75,7 +75,8 @@ Console.WriteLine("========================================");
             return Task.FromResult("(modelo aun no entrenado) Eco de tu consulta: " + prompt);
         }
 
-        var promptIds = _tokenizer.Encode(prompt).Select(i => (long)i).ToArray();
+        var promptFormateado = $"Pregunta: {prompt}\nRespuesta:";
+        var promptIds = _tokenizer.Encode(promptFormateado).Select(i => (long)i).ToArray();
         var eosId = (long)_tokenizer.Vocab[BpeTokenizer.EosToken];
 
         var generado = _model.Generate(promptIds, MaxNewTokens, ContextLength, Temperature, eosId);

@@ -35,24 +35,74 @@ public class GroundingService
     /// con un clasificador de intencion entrenado aparte.
     /// </summary>
     public async Task<string?> BuscarPorPalabrasClaveAsync(string mensaje)
-    {
-        var palabras = mensaje.ToLowerInvariant()
-            .Split(new[] { ' ', ',', '.', '?', '!', ';' }, StringSplitOptions.RemoveEmptyEntries)
-            .Where(p => p.Length > 3)
-            .ToList();
+{
+    var palabrasGenericas = new HashSet<string>
+{
+    "ciudad",
+    "provincia",
+    "lugares",
+    "lugar",
+    "turisticos",
+    "turistico",
+    "habitantes",
+    "fecha",
+    "cuando",
+    "donde",
+    "cual",
+    "cuales",
+    "que"
+};
 
-        if (palabras.Count == 0) return null;
+var palabras = mensaje
+    .ToLowerInvariant()
+    .Split(
+        new[] { ' ', ',', '.', '?', '!', ';', ':', '¿', '¡' },
+        StringSplitOptions.RemoveEmptyEntries
+    )
+    .Where(p => p.Length >= 4)
+    .Where(p => !palabrasGenericas.Contains(p))
+    .ToHashSet();
 
-        var lugares = await _db.Lugares.ToListAsync();
-        var lugar = lugares.FirstOrDefault(l => palabras.Any(p => l.Nombre.ToLowerInvariant().Contains(p)));
-        if (lugar != null)
-            return $"{lugar.Nombre} — {lugar.Descripcion}";
-
-        var datos = await _db.DatosDuros.ToListAsync();
-        var dato = datos.FirstOrDefault(d => palabras.Any(p => d.Clave.ToLowerInvariant().Contains(p)));
-        if (dato != null)
-            return $"{dato.Clave.Replace('_', ' ')}: {dato.Valor} (fuente: {dato.Fuente})";
-
+    if (palabras.Count == 0)
         return null;
+
+    var lugares = await _db.Lugares.ToListAsync();
+
+    foreach (var lugar in lugares)
+    {
+        var nombrePalabras = lugar.Nombre
+            .ToLowerInvariant()
+            .Split(
+                new[] { ' ', ',', '.', '?', '!', ';', ':', '¿', '¡' },
+                StringSplitOptions.RemoveEmptyEntries
+            )
+            .ToHashSet();
+
+        if (palabras.Any(p => nombrePalabras.Contains(p)))
+        {
+            return $"{lugar.Nombre} — {lugar.Descripcion}";
+        }
     }
+
+    var datos = await _db.DatosDuros.ToListAsync();
+
+    foreach (var dato in datos)
+    {
+        var clavePalabras = dato.Clave
+            .ToLowerInvariant()
+            .Replace('_', ' ')
+            .Split(
+                new[] { ' ', ',', '.', '?', '!', ';', ':', '¿', '¡' },
+                StringSplitOptions.RemoveEmptyEntries
+            )
+            .ToHashSet();
+
+        if (palabras.Any(p => clavePalabras.Contains(p)))
+        {
+            return $"{dato.Clave.Replace('_', ' ')}: {dato.Valor} (fuente: {dato.Fuente})";
+        }
+    }
+
+    return null;
+}
 }

@@ -1,4 +1,4 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using CorrientesIA.Data;
 using CorrientesIA.Training.Model;
@@ -547,7 +547,6 @@ static void FineTuneQA(
             Encoding.UTF8
         );
 
-    // Separamos cada ejemplo a partir de "Pregunta:"
     var bloques =
         Regex.Split(
             textoQa,
@@ -559,7 +558,7 @@ static void FineTuneQA(
         .ToList();
 
     var ejemplos =
-        new List<long[]>();
+        new List<(long[] Prefix, long[] Answer)>();
 
     foreach (var bloque in bloques)
     {
@@ -573,22 +572,70 @@ static void FineTuneQA(
             continue;
         }
 
-        var ids =
-            tokenizer.Encode(limpio);
+        var partes =
+            Regex.Split(
+                limpio,
+                @"(?m)^Respuesta:\s*"
+            );
 
-        if (ids.Length >= 2 &&
-            ids.Length <= cfg.ContextLength)
+        if (partes.Length != 2)
+        {
+            Console.WriteLine(
+                "Ejemplo QA omitido: no se encontro separacion Pregunta/Respuesta."
+            );
+
+            continue;
+        }
+
+        var pregunta =
+            partes[0].Trim();
+
+        var respuesta =
+            partes[1].Trim();
+
+        if (
+            string.IsNullOrWhiteSpace(pregunta) ||
+            string.IsNullOrWhiteSpace(respuesta)
+        )
+        {
+            continue;
+        }
+
+        var prefixText =
+            pregunta + "\nRespuesta:";
+
+        var prefixIds =
+            tokenizer
+                .Encode(prefixText)
+                .Select(i => (long)i)
+                .ToArray();
+
+        var answerIds =
+            tokenizer
+                .Encode(respuesta)
+                .Select(i => (long)i)
+                .ToArray();
+
+        if (
+            prefixIds.Length >= 1 &&
+            answerIds.Length >= 1 &&
+            prefixIds.Length + answerIds.Length <= cfg.ContextLength
+        )
         {
             ejemplos.Add(
-                ids.Select(
-                    i => (long)i
-                ).ToArray()
+                (
+                    prefixIds,
+                    answerIds
+                )
             );
         }
         else
         {
             Console.WriteLine(
-                $"Ejemplo QA omitido por longitud: {ids.Length} tokens."
+                $"Ejemplo QA omitido por longitud: " +
+                $"prefix={prefixIds.Length}, " +
+                $"respuesta={answerIds.Length}, " +
+                $"total={prefixIds.Length + answerIds.Length}"
             );
         }
     }
@@ -619,68 +666,116 @@ static void FineTuneQA(
 
     const int epocasQA = 30;
 
-    for (int epoca = 1;
-         epoca <= epocasQA;
-         epoca++)
+    for (
+        int epoca = 1;
+        epoca <= epocasQA;
+        epoca++
+    )
     {
         double perdidaAcumulada = 0;
+        int cantidadTokens = 0;
 
         foreach (var ejemplo in ejemplos)
         {
-            var inputData =
-                new long[
-                    1,
-                    ejemplo.Length - 1
-                ];
+            var prefix =
+                ejemplo.Prefix;
 
-            var targetData =
-                new long[
-                    1,
-                    ejemplo.Length - 1
-                ];
+            var answer =
+                ejemplo.Answer;
 
-            for (int i = 0;
-                 i < ejemplo.Length - 1;
-                 i++)
+            for (
+                int posicion = 0;
+                posicion < answer.Length;
+                posicion++
+            )
             {
-                inputData[0, i] =
-                    ejemplo[i];
+                var inputLength =
+                    prefix.Length + posicion;
 
-                targetData[0, i] =
-                    ejemplo[i + 1];
+                if (inputLength <= 0 ||
+                    inputLength > cfg.ContextLength)
+                {
+                    continue;
+                }
+
+                var inputData =
+                    new long[
+                        1,
+                        inputLength
+                    ];
+
+                for (
+                    int i = 0;
+                    i < prefix.Length;
+                    i++
+                )
+                {
+                    inputData[0, i] =
+                        prefix[i];
+                }
+
+                for (
+                    int i = 0;
+                    i < posicion;
+                    i++
+                )
+                {
+                    inputData[0, prefix.Length + i] =
+                        answer[i];
+                }
+
+                using var inputs =
+                    tensor(inputData);
+
+                var targetData =
+                    new long[1]
+                    {
+                        answer[posicion]
+                    };
+
+                using var targets =
+                    tensor(targetData);
+
+                optimizer.zero_grad();
+
+                using var logits =
+                    model.forward(inputs);
+
+                var ultimoLogits =
+                    logits.select(
+                        1,
+                        inputLength - 1
+                    );
+
+                using var loss =
+                    lossFn.forward(
+                        ultimoLogits.reshape(
+                            1,
+                            cfg.VocabSize
+                        ),
+                        targets
+                    );
+
+                loss.backward();
+
+                optimizer.step();
+
+                perdidaAcumulada +=
+                    loss.item<float>();
+
+                cantidadTokens++;
             }
-
-            using var inputs =
-                tensor(inputData);
-
-            using var targets =
-                tensor(targetData);
-
-            optimizer.zero_grad();
-
-            using var logits =
-                model.forward(inputs);
-
-            var loss =
-                lossFn.forward(
-                    logits.reshape(
-                        -1,
-                        cfg.VocabSize
-                    ),
-                    targets.reshape(-1)
-                );
-
-            loss.backward();
-
-            optimizer.step();
-
-            perdidaAcumulada +=
-                loss.item<float>();
         }
 
+        var promedio =
+            cantidadTokens > 0
+                ? perdidaAcumulada / cantidadTokens
+                : 0;
+
         Console.WriteLine(
-            $"  QA Epoca {epoca}/{epocasQA} - loss: " +
-            $"{perdidaAcumulada / ejemplos.Count:F4}"
+            $"  QA Epoca {epoca}/{epocasQA} - " +
+            $"loss respuesta: {promedio:F4}"
         );
     }
 }
+
