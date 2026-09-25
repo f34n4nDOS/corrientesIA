@@ -20,18 +20,20 @@ public class ChatController : ControllerBase
     public record ChatResponse(string Respuesta);
 
     [HttpPost]
-    public async Task<ActionResult<ChatResponse>> Post([FromBody] ChatRequest request)
+public async Task<ActionResult<ChatResponse>> Post([FromBody] ChatRequest request)
+{
+    if (string.IsNullOrWhiteSpace(request.Mensaje))
+        return BadRequest("El mensaje no puede estar vacio.");
+
+    var datoVerificado = await _grounding.BuscarPorPalabrasClaveAsync(request.Mensaje);
+
+    if (datoVerificado is not null)
     {
-        if (string.IsNullOrWhiteSpace(request.Mensaje))
-            return BadRequest("El mensaje no puede estar vacio.");
-
-        var respuestaModelo = await _inference.GenerarRespuestaAsync(request.Mensaje);
-        var datoVerificado = await _grounding.BuscarPorPalabrasClaveAsync(request.Mensaje);
-
-        var respuestaFinal = datoVerificado is null
-            ? respuestaModelo
-            : $"{respuestaModelo}\n\n📍 Dato verificado: {datoVerificado}";
-
-        return Ok(new ChatResponse(respuestaFinal));
+        return Ok(new ChatResponse($"📍 Dato verificado: {datoVerificado}"));
     }
+
+    var respuestaModelo = await _inference.GenerarRespuestaAsync(request.Mensaje);
+
+    return Ok(new ChatResponse(respuestaModelo));
+}
 }

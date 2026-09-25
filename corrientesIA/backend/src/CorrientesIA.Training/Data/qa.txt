@@ -1,0 +1,30 @@
+﻿Pregunta: ¿Cuál es la capital de la provincia de Corrientes?
+Respuesta: La capital de la provincia de Corrientes es la ciudad de Corrientes.
+
+Pregunta: ¿Cuándo fue fundada la ciudad de Corrientes?
+Respuesta: La ciudad de Corrientes fue fundada el 3 de abril de 1588.
+
+Pregunta: ¿Cuántos habitantes tenía la ciudad de Corrientes según el Censo 2022?
+Respuesta: Según el Censo 2022 del INDEC, la ciudad de Corrientes tenía 358223 habitantes.
+
+Pregunta: ¿Qué son los Esteros del Iberá?
+Respuesta: Los Esteros del Iberá son una reserva natural y uno de los humedales más importantes del mundo.
+
+Pregunta: ¿Qué es el chamamé?
+Respuesta: El chamamé es una expresión musical y cultural tradicional de la región del nordeste argentino, especialmente vinculada con la provincia de Corrientes.
+
+Pregunta: ¿Qué es la Costanera General San Martín?
+Respuesta: La Costanera General San Martín es un paseo costero de la ciudad de Corrientes ubicado sobre el río Paraná y constituye uno de sus principales puntos turísticos.
+
+Pregunta: ¿Dónde están los Esteros del Iberá?
+Respuesta: Los Esteros del Iberá se encuentran en la provincia de Corrientes, Argentina.
+
+Pregunta: ¿Cuál es la fecha de fundación de Corrientes?
+Respuesta: Corrientes fue fundada el 3 de abril de 1588.
+
+Pregunta: ¿Cuál es la población de Corrientes?
+Respuesta: Según el Censo 2022 del INDEC, la ciudad de Corrientes tenía 358223 habitantes.
+
+Pregunta: ¿Qué lugares turísticos hay en la ciudad de Corrientes?
+Respuesta: Entre los lugares turísticos de la ciudad de Corrientes se encuentra la Costanera General San Martín, un paseo costero sobre el río Paraná.
+

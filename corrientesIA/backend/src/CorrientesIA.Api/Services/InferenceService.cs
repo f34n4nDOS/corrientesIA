@@ -28,7 +28,7 @@ public class InferenceService
         // local, si no esta seteado, se autodetecta la carpeta model/ del repo.
         var carpetaCheckpoints = config["ModelSettings:CheckpointDir"] ?? RepoPaths.CarpetaModelo();
         var pathTokenizer = Path.Combine(carpetaCheckpoints, "tokenizer.json");
-        var pathModelo = Path.Combine(carpetaCheckpoints, "gpt-mini.pt");
+        var pathModelo = Path.Combine(carpetaCheckpoints, "gpt-mini-qa.pt");
 
         Console.WriteLine("========================================");
 Console.WriteLine($"CHECKPOINT DIR: {carpetaCheckpoints}");
