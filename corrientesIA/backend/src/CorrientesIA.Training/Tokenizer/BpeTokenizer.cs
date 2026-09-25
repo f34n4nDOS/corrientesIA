@@ -70,24 +70,27 @@ public class BpeTokenizer
         //    adyacentes mas frecuente en todo el corpus, hasta llegar a vocabSize.
         Merges.Clear();
         while (Vocab.Count < vocabSize)
-        {
-            var pares = ContarPares(frecuenciaPalabras);
-            if (pares.Count == 0) break; // ya no quedan pares para fusionar
+{
+    var pares = ContarPares(frecuenciaPalabras);
+    if (pares.Count == 0)
+        break;
 
-            var mejorPar = pares.OrderByDescending(p => p.Value).First().Key;
+    var mejorPar = pares
+        .OrderByDescending(p => p.Value)
+        .First()
+        .Key;
 
-            frecuenciaPalabras = AplicarMerge(frecuenciaPalabras, mejorPar);
+    frecuenciaPalabras = AplicarMerge(frecuenciaPalabras, mejorPar);
 
-            Merges.Add(mejorPar);
-            var nuevoSimbolo = mejorPar.Item1 + mejorPar.Item2;
-            if (!Vocab.ContainsKey(nuevoSimbolo))
-                Vocab[nuevoSimbolo] = Vocab.Count;
-        }
+    Merges.Add(mejorPar);
 
-        _mergeRank = Merges
-            .Select((par, idx) => (par, idx))
-            .ToDictionary(x => x.par, x => x.idx);
+    var nuevoSimbolo = mejorPar.Item1 + mejorPar.Item2;
+
+    if (!Vocab.ContainsKey(nuevoSimbolo))
+        Vocab[nuevoSimbolo] = Vocab.Count;
     }
+    }
+
 
     private static Dictionary<(string, string), int> ContarPares(Dictionary<string, int> frecuenciaPalabras)
     {

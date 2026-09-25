@@ -5,7 +5,7 @@ using CorrientesIA.Training.Model;
 using CorrientesIA.Training.Tokenizer;
 using TorchSharp;
 using static TorchSharp.torch;
-
+using System.Text;
 Console.WriteLine("=== CorrientesIA - Entrenamiento ===\n");
 
 var config = new ConfigurationBuilder()
@@ -37,7 +37,18 @@ try
     using var db = new AppDbContext(options);
     await db.Database.CanConnectAsync();
 
-    textos = await db.CorpusDocumentos.Select(d => d.Contenido).ToListAsync();
+    var documentos = await db.CorpusDocumentos
+    .Select(d => new { d.Id, d.Titulo, d.Fuente, d.Contenido })
+    .ToListAsync();
+
+textos = documentos.Select(d => d.Contenido).ToList();
+
+Console.WriteLine("\n--- DOCUMENTOS DEL CORPUS ---");
+foreach (var doc in documentos)
+{
+    Console.WriteLine($"ID: {doc.Id} | Titulo: {doc.Titulo} | Fuente: {doc.Fuente} | Caracteres: {doc.Contenido.Length}");
+}
+Console.WriteLine("--- FIN DOCUMENTOS ---\n");
     Console.WriteLine($"Corpus cargado desde MySQL: {textos.Count} documentos.");
 }
 catch
@@ -48,8 +59,8 @@ catch
 if (textos.Count == 0 && Directory.Exists(carpetaCorpus))
 {
     textos = Directory.GetFiles(carpetaCorpus, "*.txt")
-        .Select(File.ReadAllText)
-        .ToList();
+    .Select(path => File.ReadAllText(path, Encoding.UTF8))
+    .ToList();
     Console.WriteLine($"Corpus cargado desde disco ({carpetaCorpus}): {textos.Count} archivos.");
 }
 
@@ -127,7 +138,37 @@ Entrenar(model, idsCompletos, gptConfig);
 
 model.save(pathCheckpoint);
 Console.WriteLine($"\nModelo guardado en {pathCheckpoint}");
+Console.WriteLine("\n--- PRUEBA DE LOSS ---");
 
+model.eval();
+
+var pruebaTexto = "Corrientes es la capital de la provincia";
+var pruebaIds = tokenizer.Encode(pruebaTexto)
+    .Select(i => (long)i)
+    .ToArray();
+
+var pruebaInputs = tensor(new long[,]
+{
+    pruebaIds
+});
+
+var pruebaTargetsData = new long[1, pruebaIds.Length];
+
+for (int i = 0; i < pruebaIds.Length; i++)
+{
+    pruebaTargetsData[0, i] = pruebaIds[(i + 1) % pruebaIds.Length];
+}
+
+var pruebaTargets = tensor(pruebaTargetsData);
+
+using var logitsPrueba = model.forward(pruebaInputs);
+
+var lossPrueba = nn.CrossEntropyLoss().forward(
+    logitsPrueba.reshape(-1, gptConfig.VocabSize),
+    pruebaTargets.reshape(-1)
+);
+
+Console.WriteLine($"Loss de prueba: {lossPrueba.item<float>():F4}");
 // ---------- 7. Prueba de generacion con el modelo recien entrenado ----------
 Console.WriteLine("\n--- Prueba de generacion ---");
 var promptPrueba = "Los Esteros del Ibera";

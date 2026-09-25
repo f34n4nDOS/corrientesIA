@@ -30,6 +30,13 @@ public class InferenceService
         var pathTokenizer = Path.Combine(carpetaCheckpoints, "tokenizer.json");
         var pathModelo = Path.Combine(carpetaCheckpoints, "gpt-mini.pt");
 
+        Console.WriteLine("========================================");
+Console.WriteLine($"CHECKPOINT DIR: {carpetaCheckpoints}");
+Console.WriteLine($"TOKENIZER: {pathTokenizer}");
+Console.WriteLine($"MODELO: {pathModelo}");
+Console.WriteLine($"TOKENIZER EXISTE: {File.Exists(pathTokenizer)}");
+Console.WriteLine($"MODELO EXISTE: {File.Exists(pathModelo)}");
+Console.WriteLine("========================================");
         if (File.Exists(pathTokenizer) && File.Exists(pathModelo))
         {
             try
@@ -43,9 +50,15 @@ public class InferenceService
                 _logger.LogInformation("Modelo GptMini cargado desde {Path} (vocab={Vocab})", pathModelo, _tokenizer.Vocab.Count);
             }
             catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "No se pudo cargar el checkpoint entrenado, uso modo eco.");
-            }
+{
+    Console.WriteLine("========================================");
+    Console.WriteLine("ERROR CARGANDO EL MODELO");
+    Console.WriteLine("========================================");
+    Console.WriteLine(ex.ToString());
+    Console.WriteLine("========================================");
+
+    throw;
+}
         }
         else
         {
