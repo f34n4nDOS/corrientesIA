@@ -27,10 +27,17 @@ public async Task<ActionResult<ChatResponse>> Post([FromBody] ChatRequest reques
 
     var datoVerificado = await _grounding.BuscarPorPalabrasClaveAsync(request.Mensaje);
 
-    if (datoVerificado is not null)
-    {
-        return Ok(new ChatResponse($"📍 Dato verificado: {datoVerificado}"));
-    }
+if (datoVerificado is not null)
+{
+    return Ok(new ChatResponse($"📍 Dato verificado: {datoVerificado}"));
+}
+
+var datoCorpus = await _grounding.BuscarEnCorpusAsync(request.Mensaje);
+
+if (datoCorpus is not null)
+{
+    return Ok(new ChatResponse($"📚 Información verificada: {datoCorpus}"));
+}
 
     var respuestaModelo = await _inference.GenerarRespuestaAsync(request.Mensaje);
 
