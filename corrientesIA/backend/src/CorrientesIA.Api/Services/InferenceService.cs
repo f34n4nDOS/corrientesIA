@@ -51,13 +51,8 @@ Console.WriteLine("========================================");
             }
             catch (Exception ex)
 {
-    Console.WriteLine("========================================");
-    Console.WriteLine("ERROR CARGANDO EL MODELO");
-    Console.WriteLine("========================================");
-    Console.WriteLine(ex.ToString());
-    Console.WriteLine("========================================");
-
-    throw;
+    
+    
 }
         }
         else

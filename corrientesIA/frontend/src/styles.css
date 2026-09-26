@@ -1,6 +1,70 @@
+/* ==== CorrientesIA — tokens de diseño ====
+   Paleta inspirada en los Esteros del Iberá: verde pantano profundo,
+   acento dorado tipo flor de camalote, verde claro para datos verificados. */
+:root {
+  --bg: #0e1d19;
+  --bg-panel: #16302b;
+  --bg-elevated: #1e3c35;
+  --border: rgba(224, 164, 88, 0.16);
+  --border-strong: rgba(224, 164, 88, 0.32);
+
+  --text: #f3eee2;
+  --text-muted: #9fbdb2;
+  --text-faint: #6f8b81;
+
+  --accent: #e0a458;
+  --accent-strong: #f0bf7c;
+  --verified: #7fbf9e;
+  --error: #e08a6b;
+
+  --user-bubble: #24463d;
+  --bot-bubble: #16302b;
+
+  --radius-sm: 10px;
+  --radius-md: 16px;
+  --radius-lg: 22px;
+
+  --font-display: 'Fraunces', Georgia, serif;
+  --font-body: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  height: 100%;
+}
+
 body {
   margin: 0;
-  font-family: system-ui, sans-serif;
-  background: #0f1220;
-  color: #f0f0f0;
+  font-family: var(--font-body);
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--accent);
+  color: #16302b;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 8px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }

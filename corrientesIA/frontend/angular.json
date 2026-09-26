@@ -15,11 +15,13 @@
             "outputPath": "dist/corrientesia-frontend",
             "index": "src/index.html",
             "browser": "src/main.ts",
-            "polyfills": ["zone.js"],
-
             "tsConfig": "tsconfig.app.json",
+            "polyfills": ["zone.js"],
             "assets": ["src/favicon.ico", "src/assets"],
-            "styles": ["src/styles.css"]
+            "styles": ["src/styles.css"],
+            "optimization": {
+              "fonts": false
+            }
           },
           "configurations": {
             "production": { "outputHashing": "all" }
@@ -33,6 +35,6 @@
     }
   },
   "cli": {
-    "analytics": "497c8a3a-439b-4920-9442-3b148498afc4"
+    "analytics": "ea273b44-916c-4cbc-8963-0b3b4d90b976"
   }
 }

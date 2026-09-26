@@ -41,6 +41,12 @@ if (datoCorpus is not null)
 
     var respuestaModelo = await _inference.GenerarRespuestaAsync(request.Mensaje);
 
-    return Ok(new ChatResponse(respuestaModelo));
+var esRespuestaUtil = !string.IsNullOrWhiteSpace(respuestaModelo)
+    && !respuestaModelo.StartsWith("(modelo aun no entrenado)")
+    && !respuestaModelo.StartsWith("(el modelo no genero");
+
+return Ok(new ChatResponse(esRespuestaUtil
+    ? respuestaModelo
+    : "No encontré información verificada ni pude generar una respuesta útil para esa consulta."));
 }
 }

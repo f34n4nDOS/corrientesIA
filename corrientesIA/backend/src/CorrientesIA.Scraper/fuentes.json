@@ -14,7 +14,16 @@
   { "Url": "https://es.wikipedia.org/wiki/Monte_Caseros_(Corrientes)", "Categoria": "geografia", "Tipo": "wikipedia" },
   { "Url": "https://es.wikipedia.org/wiki/Saladas_(Corrientes)", "Categoria": "geografia", "Tipo": "wikipedia" },
   { "Url": "https://es.wikipedia.org/wiki/San_Roque_(Corrientes)", "Categoria": "geografia", "Tipo": "wikipedia" },
-  { "Url": "https://es.wikipedia.org/wiki/San_Luis_del_Palmar", "Categoria": "geografia", "Tipo": "wikipedia" }
+  { "Url": "https://es.wikipedia.org/wiki/San_Luis_del_Palmar", "Categoria": "geografia", "Tipo": "wikipedia" }, 
+  {
+  "Url": "https://es.wikipedia.org/wiki/R%C3%ADo_Paran%C3%A1",
+  "Categoria": "geografia",
+  "Tipo": "wikipedia"
+}, {
+  "Url": "https://es.wikipedia.org/wiki/Pay%C3%A9",
+  "Categoria": "cultura",
+  "Tipo": "wikipedia"
+}
 ]
 
 
