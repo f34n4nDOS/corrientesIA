@@ -16,6 +16,11 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 
 builder.Services.AddSingleton<InferenceService>();
 builder.Services.AddScoped<GroundingService>();
+builder.Services.AddHttpClient<WebSearchService>(client =>
+{
+    client.BaseAddress = new Uri("http://127.0.0.1:8080/");
+    client.Timeout = TimeSpan.FromSeconds(10);
+});
 
 builder.Services.AddCors(options =>
 {

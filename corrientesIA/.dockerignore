@@ -1,0 +1,15 @@
+.git
+.gitignore
+**/bin
+**/obj
+**/node_modules
+**/dist
+**/Debug
+**/Release
+.vs
+.vscode
+.idea
+*.user
+*.suo
+*.tmp
+*.log
