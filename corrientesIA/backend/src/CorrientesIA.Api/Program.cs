@@ -9,16 +9,25 @@ builder.Logging.SetMinimumLevel(LogLevel.Information);
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
+var connectionString =
+    builder.Configuration.GetConnectionString("Default")
+    ?? throw new InvalidOperationException(
+        "No se configuró la cadena de conexión a MySQL.");
+
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseMySql(
-        builder.Configuration.GetConnectionString("Default"),
-        ServerVersion.AutoDetect(builder.Configuration.GetConnectionString("Default"))));
+        connectionString,
+        ServerVersion.AutoDetect(connectionString)));
 
 builder.Services.AddSingleton<InferenceService>();
 builder.Services.AddScoped<GroundingService>();
+var searxngUrl =
+    builder.Configuration["SEARXNG_URL"]
+    ?? "http://127.0.0.1:8080/";
+
 builder.Services.AddHttpClient<WebSearchService>(client =>
 {
-    client.BaseAddress = new Uri("http://127.0.0.1:8080/");
+    client.BaseAddress = new Uri(searxngUrl);
     client.Timeout = TimeSpan.FromSeconds(10);
 });
 
