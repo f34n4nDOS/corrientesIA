@@ -70,11 +70,14 @@ Console.WriteLine("========================================");
             return Task.FromResult("(modelo aun no entrenado) Eco de tu consulta: " + prompt);
         }
 
-        var promptFormateado = $"Pregunta: {prompt}\nRespuesta:";
+        var promptFormateado = $"{prompt}\nRespuesta:";
         var promptIds = _tokenizer.Encode(promptFormateado).Select(i => (long)i).ToArray();
         var eosId = (long)_tokenizer.Vocab[BpeTokenizer.EosToken];
 
         var generado = _model.Generate(promptIds, MaxNewTokens, ContextLength, Temperature, eosId);
+        Console.WriteLine("===== PROMPT TOKENIZADO =====");
+Console.WriteLine(promptFormateado);
+Console.WriteLine("============================");
         var soloGenerado = generado.Skip(promptIds.Length).Select(i => (int)i).ToArray();
 
                 var texto = _tokenizer.Decode(soloGenerado);

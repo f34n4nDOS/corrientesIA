@@ -70,8 +70,7 @@ public class GptMini : Module<Tensor, Tensor>
                 var seqLen = (int)logits.shape[1];
                 var ultimoLogit = logits.select(1, seqLen - 1).squeeze(0); // (vocabSize)
 
-                var probs = nn.functional.softmax(ultimoLogit / temperature, dim: 0);
-                var siguiente = multinomial(probs, 1).item<long>();
+                var siguiente = ultimoLogit.argmax().item<long>();
 
                 ids.Add(siguiente);
                 if (eosId.HasValue && siguiente == eosId.Value) break;
