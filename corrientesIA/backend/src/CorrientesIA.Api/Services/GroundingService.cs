@@ -191,6 +191,7 @@ if (esConsultaUbicacion)
 
         var documentos =
             await _db.CorpusDocumentos.ToListAsync();
+            
 
         if (documentos.Count == 0)
             return null;

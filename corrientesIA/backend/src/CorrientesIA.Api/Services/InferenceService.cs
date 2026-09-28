@@ -31,12 +31,12 @@ public class InferenceService
         var pathModelo = Path.Combine(carpetaCheckpoints, "gpt-mini-qa.pt");
 
         Console.WriteLine("========================================");
-Console.WriteLine($"CHECKPOINT DIR: {carpetaCheckpoints}");
-Console.WriteLine($"TOKENIZER: {pathTokenizer}");
-Console.WriteLine($"MODELO: {pathModelo}");
-Console.WriteLine($"TOKENIZER EXISTE: {File.Exists(pathTokenizer)}");
-Console.WriteLine($"MODELO EXISTE: {File.Exists(pathModelo)}");
-Console.WriteLine("========================================");
+        Console.WriteLine($"CHECKPOINT DIR: {carpetaCheckpoints}");
+        Console.WriteLine($"TOKENIZER: {pathTokenizer}");
+        Console.WriteLine($"MODELO: {pathModelo}");
+        Console.WriteLine($"TOKENIZER EXISTE: {File.Exists(pathTokenizer)}");
+        Console.WriteLine($"MODELO EXISTE: {File.Exists(pathModelo)}");
+        Console.WriteLine("========================================");
         if (File.Exists(pathTokenizer) && File.Exists(pathModelo))
         {
             try
@@ -51,7 +51,7 @@ Console.WriteLine("========================================");
             }
             catch (Exception ex)
 {
-    
+    _logger.LogError(ex, "Error al cargar el modelo GptMini desde {Path}", pathModelo);
     
 }
         }
@@ -76,8 +76,8 @@ Console.WriteLine("========================================");
 
         var generado = _model.Generate(promptIds, MaxNewTokens, ContextLength, Temperature, eosId);
         Console.WriteLine("===== PROMPT TOKENIZADO =====");
-Console.WriteLine(promptFormateado);
-Console.WriteLine("============================");
+        Console.WriteLine(promptFormateado);
+        Console.WriteLine("============================");
         var soloGenerado = generado.Skip(promptIds.Length).Select(i => (int)i).ToArray();
 
                 var texto = _tokenizer.Decode(soloGenerado);
