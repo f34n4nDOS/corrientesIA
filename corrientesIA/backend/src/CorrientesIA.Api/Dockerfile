@@ -12,7 +12,8 @@ COPY ["backend/src/CorrientesIA.Training/CorrientesIA.Training.csproj", "backend
 RUN dotnet restore "backend/src/CorrientesIA.Api/CorrientesIA.Api.csproj"
 
 COPY backend/ backend/
-RUN dotnet publish "backend/src/CorrientesIA.Api/CorrientesIA.Api.csproj" -c Release -o /app/publish
+RUN dotnet publish "backend/src/CorrientesIA.Api/CorrientesIA.Api.csproj" -c Release -r linux-x64 --self-contained false -o /app/publish
+RUN find /app/publish -maxdepth 1 -type f \( -name "*.so" -o -name "*.dll" \) -print
 
 FROM mcr.microsoft.com/dotnet/aspnet:8.0 AS final
 WORKDIR /app
