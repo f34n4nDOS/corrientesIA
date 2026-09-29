@@ -246,7 +246,69 @@ namespace CorrientesIA.Api.Services
             if (EsConsultaFecha(n))
                 return BuscarRespuestaFecha(documentos, n);
 
-            return BuscarRespuestaGeneral(documentos, n);
+            // Antes acá caía BuscarRespuestaGeneral, que arma una respuesta
+            // pegando "Titulo: oracion". Ese caso ahora lo resuelve el
+            // ChatController con el modelo GptMini entrenado, usando
+            // BuscarContextoGeneralAsync para conseguir el documento
+            // más relevante como contexto — así la respuesta la redacta
+            // el modelo en vez de una plantilla fija.
+            return null;
+        }
+
+        /// <summary>
+        /// Busca el documento del corpus más relevante para una consulta
+        /// "general" (sin coincidencias con las categorías específicas de
+        /// arriba: población, ubicación, definición, fecha, etc). Devuelve
+        /// el título y contenido crudos para que quien llame (el
+        /// ChatController) los use como contexto al generar una respuesta
+        /// con el modelo entrenado, en vez de una plantilla armada acá.
+        /// </summary>
+        public async Task<(string Titulo, string Contenido)?> BuscarContextoGeneralAsync(string consulta)
+        {
+            if (string.IsNullOrWhiteSpace(consulta))
+                return null;
+
+            var n = NormalizarTexto(consulta);
+
+            if (EsGobernadorActual(n))
+                return null;
+
+            var documentos = await ObtenerDocumentosAsync();
+            if (documentos.Count == 0)
+                return null;
+
+            var palabras = ObtenerPalabrasRelevantes(n);
+            if (palabras.Count == 0)
+                return null;
+
+            DocumentoIndexado? mejor = null;
+            int mejorScore = 0;
+
+            foreach (var documento in documentos)
+            {
+                int score = 0;
+
+                foreach (var palabra in palabras)
+                {
+                    if (documento.TituloTokens.Contains(palabra))
+                        score += 50;
+
+                    if (documento.ContenidoTokens.Contains(palabra))
+                        score += 5;
+                }
+
+                if (score > mejorScore)
+                {
+                    mejorScore = score;
+                    mejor = documento;
+                }
+            }
+
+            // Un único match débil en el contenido no es evidencia suficiente.
+            if (mejor == null || mejorScore < PuntajeMinimoGeneral)
+                return null;
+
+            return (mejor.Titulo, mejor.Contenido);
         }
 
         // ============================================================
@@ -662,52 +724,6 @@ namespace CorrientesIA.Api.Services
         }
 
         // ============================================================
-        // CONSULTA GENERAL
-        // ============================================================
-
-        private static string? BuscarRespuestaGeneral(
-            IReadOnlyList<DocumentoIndexado> documentos,
-            string n)
-        {
-            var palabras = ObtenerPalabrasRelevantes(n);
-            if (palabras.Count == 0)
-                return null;
-
-            DocumentoIndexado? mejor = null;
-            int mejorScore = 0;
-
-            foreach (var documento in documentos)
-            {
-                int score = 0;
-
-                foreach (var palabra in palabras)
-                {
-                    if (documento.TituloTokens.Contains(palabra))
-                        score += 50;
-
-                    if (documento.ContenidoTokens.Contains(palabra))
-                        score += 5;
-                }
-
-                if (score > mejorScore)
-                {
-                    mejorScore = score;
-                    mejor = documento;
-                }
-            }
-
-            // Un único match débil en el contenido no es evidencia suficiente.
-            if (mejor == null || mejorScore < PuntajeMinimoGeneral)
-                return null;
-
-            var oracion = ObtenerMejorOracion(mejor.Contenido, palabras);
-
-            return string.IsNullOrWhiteSpace(oracion)
-                ? null
-                : $"{mejor.Titulo}: {oracion}";
-        }
-
-        // ============================================================
         // RESPUESTAS META
         // ============================================================
 
@@ -870,31 +886,6 @@ namespace CorrientesIA.Api.Services
         // ============================================================
         // ORACIONES
         // ============================================================
-
-        private static string? ObtenerMejorOracion(
-            string contenido,
-            IReadOnlyCollection<string> palabras)
-        {
-            string? mejor = null;
-            int mejorScore = 0;
-
-            foreach (var oracion in SepararOraciones(contenido))
-            {
-                var tokens = new HashSet<string>(
-                    NormalizarTexto(oracion).Split(' ', StringSplitOptions.RemoveEmptyEntries),
-                    StringComparer.Ordinal);
-
-                int score = palabras.Count(tokens.Contains);
-
-                if (score > mejorScore)
-                {
-                    mejorScore = score;
-                    mejor = oracion;
-                }
-            }
-
-            return mejor;
-        }
 
         private static string PrimeraOracion(string? contenido) =>
             string.IsNullOrWhiteSpace(contenido)

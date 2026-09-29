@@ -44,8 +44,9 @@ public class ChatController : ControllerBase
             return Ok(new ChatResponse(datoVerificado));
         }
 
-        // 2. Si no existe una coincidencia directa,
-        //    buscar en el corpus propio.
+        // 2. Si no existe una coincidencia directa, buscar en el corpus
+        //    propio (respuestas estructuradas: población, ubicación,
+        //    definición, fecha, listas de localidades, meta-consultas).
         var datoCorpus =
             await _grounding.BuscarEnCorpusAsync(
                 request.Mensaje);
@@ -55,7 +56,33 @@ public class ChatController : ControllerBase
             return Ok(new ChatResponse(datoCorpus));
         }
 
-        // 3. Ultimo recurso: búsqueda web.
+        // 3. Consulta "general": no hay una respuesta estructurada, pero
+        //    sí un documento del corpus relacionado. En vez de devolver
+        //    ese documento armado a mano ("Titulo: oracion"), se lo
+        //    pasamos como contexto al modelo GptMini entrenado y dejamos
+        //    que él redacte la respuesta con sus propias palabras.
+        var contexto =
+            await _grounding.BuscarContextoGeneralAsync(
+                request.Mensaje);
+
+        if (contexto is not null)
+        {
+            var prompt =
+                $"Contexto sobre {contexto.Value.Titulo}: {contexto.Value.Contenido}\n" +
+                $"Pregunta: {request.Mensaje}";
+
+            var respuestaGenerada =
+                await _inference.GenerarRespuestaAsync(prompt);
+
+            if (!string.IsNullOrWhiteSpace(respuestaGenerada) &&
+                !respuestaGenerada.StartsWith("(modelo aun no entrenado)", StringComparison.Ordinal) &&
+                !respuestaGenerada.StartsWith("(el modelo no genero texto util", StringComparison.Ordinal))
+            {
+                return Ok(new ChatResponse(respuestaGenerada));
+            }
+        }
+
+        // 4. Ultimo recurso: búsqueda web.
         var resultadosWeb =
             await _webSearch.BuscarAsync(
                 request.Mensaje,
@@ -96,7 +123,7 @@ var respuestaWeb =
             return Ok(new ChatResponse(respuestaWeb));
         }
 
-        // 4. No inventar una respuesta si tampoco encontramos
+        // 5. No inventar una respuesta si tampoco encontramos
         //    información suficiente en Internet.
         return Ok(new ChatResponse(
             "No encontré información verificada sobre esa consulta."
