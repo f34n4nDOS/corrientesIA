@@ -35,13 +35,23 @@ public class WebSearchService
 
         // Normalizar y clasificar las fuentes.
         foreach (var resultado in resultados)
-        {
-            resultado.TipoFuente =
-                ClasificarFuente(resultado.Url);
+{
+    resultado.TipoFuente =
+        ClasificarFuente(resultado.Url);
 
-            resultado.PrioridadFuente =
-                ObtenerPrioridadFuente(resultado.TipoFuente);
-        }
+    resultado.PrioridadFuente =
+        ObtenerPrioridadFuente(resultado.TipoFuente);
+
+    var descripcionOg =
+        await ObtenerDescripcionOgAsync(
+            resultado.Url,
+            cancellationToken);
+
+    if (!string.IsNullOrWhiteSpace(descripcionOg))
+    {
+        resultado.Content = descripcionOg;
+    }
+}
 
         // Separar la consulta en palabras significativas.
         var palabrasConsulta = consulta
@@ -105,12 +115,60 @@ public class WebSearchService
         // 2. Coincidencia en contenido
         // 3. Score original de SearXNG
         return resultados
-    .OrderByDescending(r => r.RelevanciaConsulta)
-    .ThenByDescending(r => r.PrioridadFuente)
+    .OrderByDescending(r => r.PrioridadFuente)
+    .ThenByDescending(r => r.RelevanciaConsulta)
     .ThenByDescending(r => r.Score)
     .ToList();
     }
+    private async Task<string?> ObtenerDescripcionOgAsync(
+    string url,
+    CancellationToken cancellationToken)
+{
+    try
+    {
+        var html =
+            await _http.GetStringAsync(
+                url,
+                cancellationToken);
 
+        var match =
+            System.Text.RegularExpressions.Regex.Match(
+                html,
+                "<meta\\s+property=\"og:description\"\\s+content=\"([^\"]+)\"",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        if (match.Success)
+    return match.Groups[1].Value;
+
+// Algunas fuentes oficiales no tienen og:description.
+// Intentamos obtener información estructurada directamente del HTML.
+var gobernadorMatch =
+    System.Text.RegularExpressions.Regex.Match(
+        html,
+        @"<h2[^>]*class=""[^""]*nombre-persona-organismo[^""]*""[^>]*>\s*(.*?)\s*</h2>\s*<div[^>]*class=""[^""]*cargo-persona-organismo[^""]*""[^>]*>\s*(.*?)\s*</div>",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase |
+        System.Text.RegularExpressions.RegexOptions.Singleline);
+
+if (gobernadorMatch.Success)
+{
+    var nombre =
+        System.Net.WebUtility.HtmlDecode(
+            gobernadorMatch.Groups[1].Value).Trim();
+
+    var cargo =
+        System.Net.WebUtility.HtmlDecode(
+            gobernadorMatch.Groups[2].Value).Trim();
+
+    return $"{nombre} — {cargo}";
+}
+
+return null;
+    }
+    catch
+    {
+        return null;
+    }
+}
     private static string ClasificarFuente(string url)
     {
         if (!Uri.TryCreate(

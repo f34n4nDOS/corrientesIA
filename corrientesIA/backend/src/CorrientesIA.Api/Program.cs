@@ -17,7 +17,7 @@ var connectionString =
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseMySql(
         connectionString,
-        ServerVersion.AutoDetect(connectionString)));
+        new MySqlServerVersion(new Version(9, 4, 0))));
 
 builder.Services.AddSingleton<InferenceService>();
 builder.Services.AddScoped<GroundingService>();

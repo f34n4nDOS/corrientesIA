@@ -149,11 +149,11 @@ namespace CorrientesIA.Api.Services
                 return await ConstruirRespuestaSobreFaltantesAsync();
             }
 
-            if (EsConsultaConocimiento(consulta))
-            {
-                return await ConstruirRespuestaSobreConocimientoAsync();
-            }
-
+            if (EsConsultaConocimiento(consulta) &&
+    !EsConsultaInformacionLugar(consulta))
+{
+    return await ConstruirRespuestaSobreConocimientoAsync();
+}
             // --------------------------------------------------------
             // Datos estructurados
             // --------------------------------------------------------
@@ -254,11 +254,11 @@ namespace CorrientesIA.Api.Services
             {
                 return await ConstruirRespuestaSobreFaltantesAsync();
             }
-
-            if (esConocimiento)
-            {
-                return await ConstruirRespuestaSobreConocimientoAsync();
-            }
+            
+            if (esConocimiento && !EsConsultaInformacionLugar(consulta))
+                {
+                    return await ConstruirRespuestaSobreConocimientoAsync();
+                }
 
             // --------------------------------------------------------
             // CARGAR CORPUS
@@ -1234,15 +1234,25 @@ namespace CorrientesIA.Api.Services
         }
 
         private bool EsConsultaInformacionLugar(
-            string consulta)
-        {
-            var texto =
-                NormalizarTexto(consulta);
+    string consulta)
+{
+    var texto =
+        NormalizarTexto(consulta);
 
-            return texto.Contains(
-                "informacion sobre",
-                StringComparison.OrdinalIgnoreCase);
-        }
+    return
+        texto.Contains(
+            "informacion sobre",
+            StringComparison.OrdinalIgnoreCase) ||
+        texto.Contains(
+            "que informacion tiene corrientesia sobre",
+            StringComparison.OrdinalIgnoreCase) ||
+        texto.Contains(
+            "que informacion conoce corrientesia sobre",
+            StringComparison.OrdinalIgnoreCase) ||
+        texto.Contains(
+            "que sabe corrientesia sobre",
+            StringComparison.OrdinalIgnoreCase);
+}
 
         private bool EsConsultaDefinicion(
             string consulta)

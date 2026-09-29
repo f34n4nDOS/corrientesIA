@@ -63,7 +63,14 @@ public class ChatController : ControllerBase
 
         var mejorResultado =
             resultadosWeb.FirstOrDefault();
-    Console.WriteLine($"WEB RESULTADO: {mejorResultado?.Title} | {mejorResultado?.Content}");
+    foreach (var resultado in resultadosWeb)
+{
+    Console.WriteLine(
+        $"WEB: [{resultado.TipoFuente}] " +
+        $"REL={resultado.RelevanciaConsulta} " +
+        $"PRIO={resultado.PrioridadFuente} " +
+        $"{resultado.Title}");
+}
         if (mejorResultado is not null &&
             !string.IsNullOrWhiteSpace(mejorResultado.Content) &&
             !string.IsNullOrWhiteSpace(mejorResultado.Url))
@@ -81,19 +88,9 @@ if (contenido.EndsWith("..."))
 
 contenido = contenido.Replace("La. capital", "La capital");
 
-var primeraOracion = contenido;
-
-var punto = contenido.IndexOf('.');
-
-if (punto > 0)
-{
-    primeraOracion =
-        contenido[..(punto + 1)].Trim();
-}
-
 var respuestaWeb =
     $"Según {mejorResultado.TipoFuente.ToLowerInvariant()}: " +
-    $"{primeraOracion}\n\n" +
+    $"{contenido}\n\n" +
     $"Fuente: {mejorResultado.Url}";
 
             return Ok(new ChatResponse(respuestaWeb));
