@@ -1,1346 +1,1723 @@
+using System;
+using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Text;
+using System.Threading.Tasks;
 using CorrientesIA.Data;
+using CorrientesIA.Data.Models;
 using Microsoft.EntityFrameworkCore;
 
-namespace CorrientesIA.Api.Services;
-
-// =============================================================
-// CORRIENTESIA - GROUNDING SERVICE
-// =============================================================
-//
-// Busca información verificada en MySQL antes de utilizar
-// el modelo generativo.
-//
-// Objetivos:
-// 1. Evitar falsos positivos.
-// 2. Priorizar documentos específicos.
-// 3. Detectar consultas de ubicación y definición.
-// 4. Extraer una oración relevante del corpus.
-// 5. Devolver null cuando el corpus realmente no sabe.
-//
-// =============================================================
-
-public class GroundingService
+namespace CorrientesIA.Api.Services
 {
-    private readonly AppDbContext _db;
-
-    public GroundingService(AppDbContext db)
+    public class GroundingService
     {
-        _db = db;
-    }
+        private readonly AppDbContext _db;
 
-    // =============================================================
-    // DATOS DUROS Y LUGARES
-    // =============================================================
-
-    public async Task<string?> BuscarDatoDuroAsync(string clave)
-    {
-        var dato = await _db.DatosDuros
-            .FirstOrDefaultAsync(d => d.Clave == clave);
-
-        return dato?.Valor;
-    }
-
-    public async Task<List<string>> BuscarLugaresAsync(string categoria)
-    {
-        return await _db.Lugares
-            .Where(l => l.Categoria == categoria)
-            .Select(l => l.Nombre)
-            .ToListAsync();
-    }
-
-    // =============================================================
-    // DATOS DUROS Y LUGARES POR PALABRAS CLAVE
-    // =============================================================
-
-    public async Task<string?> BuscarPorPalabrasClaveAsync(string mensaje)
-    {
-        
-      var palabrasConsulta =
-    ObtenerPalabrasNormalizadas(mensaje);
-
-var esConsultaUbicacion =
-    palabrasConsulta.Contains("donde") ||
-    palabrasConsulta.Contains("queda") ||
-    palabrasConsulta.Contains("ubicada") ||
-    palabrasConsulta.Contains("ubicado") ||
-    palabrasConsulta.Contains("localizada") ||
-    palabrasConsulta.Contains("localizado") ||
-    palabrasConsulta.Contains("situada") ||
-    palabrasConsulta.Contains("situado") ||
-    palabrasConsulta.Contains("encuentra");
-
-if (esConsultaUbicacion)
-{
-    var lugaresUbicacion =
-        await _db.Lugares.ToListAsync();
-
-    foreach (var lugar in lugaresUbicacion)
-    {
-        var nombrePalabras =
-            ObtenerPalabrasNormalizadas(lugar.Nombre)
-                .Where(p => p.Length >= 4)
-                .ToHashSet();
-
-        var coincidencias =
-            palabrasConsulta.Count(p =>
-                nombrePalabras.Contains(p));
-
-        if (coincidencias >=
-            Math.Max(
-                1,
-                (int)Math.Ceiling(
-                    nombrePalabras.Count / 2.0)))
+        public GroundingService(AppDbContext db)
         {
-            if (!string.IsNullOrWhiteSpace(lugar.Localidad))
-            {
-                return
-                    $"{lugar.Nombre} se encuentra en " +
-                    $"{lugar.Localidad}.";
-            }
-        }
-    }
-
-    return null;
-}
-        var palabrasGenericas =
-            ObtenerPalabrasGenericas();
-
-        var palabras =
-            ObtenerPalabrasNormalizadas(mensaje)
-                .Where(p => p.Length >= 4)
-                .Where(p => !palabrasGenericas.Contains(p))
-                .ToHashSet();
-
-        if (palabras.Count == 0)
-            return null;
-
-        // ---------------------------------------------------------
-        // 1. Lugares almacenados directamente
-        // ---------------------------------------------------------
-
-        var lugares =
-            await _db.Lugares.ToListAsync();
-
-        foreach (var lugar in lugares)
-        {
-            var nombrePalabras =
-                ObtenerPalabrasNormalizadas(lugar.Nombre)
-                    .ToHashSet();
-
-            var coincidencias =
-                palabras.Count(p =>
-                    nombrePalabras.Contains(p));
-
-            if (coincidencias >=
-                Math.Max(
-                    1,
-                    (int)Math.Ceiling(
-                        nombrePalabras.Count / 2.0)))
-            {
-                return
-                    $"{lugar.Nombre} — " +
-                    $"{lugar.Descripcion}";
-            }
+            _db = db;
         }
 
-        // ---------------------------------------------------------
-        // 2. Datos duros
-        // ---------------------------------------------------------
+        // ============================================================
+        // DATOS DUROS
+        // ============================================================
 
-        var datos =
-            await _db.DatosDuros.ToListAsync();
-
-        foreach (var dato in datos)
+        public async Task<string?> BuscarDatoDuroAsync(string consulta)
         {
-            var clavePalabras =
-                ObtenerPalabrasNormalizadas(
-                    dato.Clave.Replace('_', ' '))
-                .ToHashSet();
+            if (string.IsNullOrWhiteSpace(consulta))
+                return null;
 
-            var coincidencias =
-                palabras.Count(p =>
-                    clavePalabras.Contains(p));
+            var consultaNormalizada = NormalizarTexto(consulta);
 
-            if (coincidencias >= 2)
+            var datos = await _db.DatosDuros
+                .AsNoTracking()
+                .ToListAsync();
+
+            if (datos.Count == 0)
+                return null;
+
+            foreach (var dato in datos)
             {
-                return
-                    $"{dato.Clave.Replace('_', ' ')}: " +
-                    $"{dato.Valor} " +
-                    $"(fuente: {dato.Fuente})";
-            }
-        }
+                var clave = NormalizarTexto(dato.Clave);
+                var valor = NormalizarTexto(dato.Valor);
 
-        return null;
-    }
+                if (string.IsNullOrWhiteSpace(clave))
+                    continue;
 
-    // =============================================================
-    // BÚSQUEDA EN CORPUS
-    // =============================================================
+                var palabrasClave = clave
+                    .Split(' ', StringSplitOptions.RemoveEmptyEntries);
 
-    public async Task<string?> BuscarEnCorpusAsync(string mensaje)
-    {
-        var palabras =
-            ObtenerPalabrasNormalizadas(mensaje)
-                .Where(p => p.Length >= 3)
-                .ToHashSet();
+                var coincidencias = palabrasClave.Count(
+                    palabra => ContienePalabra(
+                        consultaNormalizada,
+                        palabra));
 
-        if (palabras.Count == 0)
-            return null;
-
-        var documentos =
-            await _db.CorpusDocumentos.ToListAsync();
-            
-
-        if (documentos.Count == 0)
-            return null;
-
-        // ---------------------------------------------------------
-        // INTENCIONES
-        // ---------------------------------------------------------
-
-        var palabrasUbicacion =
-            new HashSet<string>
-            {
-                "donde",
-                "queda",
-                "ubicada",
-                "ubicado",
-                "localizada",
-                "localizado",
-                "situada",
-                "situado",
-                "encuentra"
-            };
-
-        var esConsultaUbicacion =
-            palabras.Any(p =>
-                palabrasUbicacion.Contains(p));
-            Console.WriteLine(
-    $"[GROUNDING] Consulta: {mensaje}");
-
-Console.WriteLine(
-    $"[GROUNDING] Palabras: {string.Join(", ", palabras)}");
-
-Console.WriteLine(
-    $"[GROUNDING] Es ubicación: {esConsultaUbicacion}");
-
-        var palabrasDefinicion =
-            new HashSet<string>
-            {
-                "que",
-                "significa",
-                "define",
-                "definicion"
-            };
-
-        var esConsultaDefinicion =
-            palabras.Any(p =>
-                palabrasDefinicion.Contains(p));
-        var palabrasFecha =
-    new HashSet<string>
-    {
-        "cuando",
-        "fecha",
-        "fundada",
-        "fundado",
-        "fundacion"
-    };
-
-var esConsultaFecha =
-    palabras.Any(p =>
-        palabrasFecha.Contains(p));
-        // ---------------------------------------------------------
-        // PALABRAS DE LA ENTIDAD
-        // ---------------------------------------------------------
-
-        var palabrasGenericas =
-            ObtenerPalabrasGenericas();
-
-        var palabrasEntidad =
-            palabras
-                .Where(p =>
-                    !palabrasGenericas.Contains(p))
-                .Where(p =>
-                    p.Length >= 4)
-                .ToHashSet();
-
-        // ---------------------------------------------------------
-        // CASO ESPECIAL:
-        // "segunda ciudad más poblada"
-        // ---------------------------------------------------------
-
-        var consultaSegundaCiudad =
-            palabras.Contains("segunda") &&
-            (
-                palabras.Contains("poblada") ||
-                palabras.Contains("ciudad")
-            );
-
-        if (consultaSegundaCiudad)
-        {
-            var fraseClave =
-                "segunda ciudad más poblada";
-
-            var fraseNormalizada =
-                NormalizarTexto(fraseClave);
-
-            var documentoFrase =
-                documentos.FirstOrDefault(d =>
-                    NormalizarTexto(d.Contenido)
-                        .Contains(
-                            fraseNormalizada,
-                            StringComparison.OrdinalIgnoreCase));
-
-            if (documentoFrase is not null)
-            {
-                var contenidoNormalizado =
-                    NormalizarTexto(
-                        documentoFrase.Contenido);
-
-                var posicionFrase =
-                    contenidoNormalizado.IndexOf(
-                        fraseNormalizada,
-                        StringComparison.OrdinalIgnoreCase);
-
-                if (posicionFrase >= 0)
+                if (coincidencias == palabrasClave.Length)
                 {
-                    var inicioFrase =
-                        Math.Max(
-                            0,
-                            posicionFrase - 100);
+                    return $"{dato.Clave}: {dato.Valor}";
+                }
 
-                    var longitudFrase =
-                        Math.Min(
-                            700,
-                            documentoFrase.Contenido.Length -
-                            inicioFrase);
-
-                    var contextoFrase =
-                        documentoFrase.Contenido
-                            .Substring(
-                                inicioFrase,
-                                longitudFrase)
-                            .Trim();
-
-                    return
-                        $"{documentoFrase.Titulo}: " +
-                        $"...{contextoFrase}...";
+                if (!string.IsNullOrWhiteSpace(valor) &&
+                    consultaNormalizada.Contains(
+                        valor,
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return $"{dato.Clave}: {dato.Valor}";
                 }
             }
+
+            return null;
         }
 
-        // ---------------------------------------------------------
-        // Si no tenemos entidad concreta, no debemos inventar
-        // una coincidencia documental.
-        // ---------------------------------------------------------
+        // ============================================================
+        // LUGARES
+        // ============================================================
 
-        if (palabrasEntidad.Count == 0)
-            return null;
+        public async Task<string?> BuscarLugaresAsync(string consulta)
+        {
+            if (string.IsNullOrWhiteSpace(consulta))
+                return null;
 
-        // ---------------------------------------------------------
-        // BUSCAR DOCUMENTOS
-        // ---------------------------------------------------------
+            var normalizada = NormalizarTexto(consulta);
 
-        var resultados =
-            documentos
-                .Select(documento =>
+            var lugares = await _db.Lugares
+                .AsNoTracking()
+                .ToListAsync();
+
+            if (lugares.Count == 0)
+                return null;
+
+            foreach (var lugar in lugares)
+            {
+                var nombre = NormalizarTexto(lugar.Nombre);
+                var descripcion = lugar.Descripcion ?? string.Empty;
+                var localidad = NormalizarTexto(lugar.Localidad);
+                var categoria = NormalizarTexto(lugar.Categoria);
+
+                if (string.IsNullOrWhiteSpace(nombre))
+                    continue;
+
+                bool coincideNombre =
+                    ContieneEntidad(normalizada, nombre);
+
+                bool coincideLocalidad =
+                    !string.IsNullOrWhiteSpace(localidad) &&
+                    ContieneEntidad(normalizada, localidad);
+
+                bool coincideCategoria =
+                    !string.IsNullOrWhiteSpace(categoria) &&
+                    ContienePalabra(normalizada, categoria);
+
+                if (coincideNombre ||
+                    (coincideLocalidad && coincideCategoria))
                 {
-                    var tituloNormalizado =
-                        NormalizarTexto(
-                            documento.Titulo);
+                    return $"{lugar.Nombre}: {descripcion}";
+                }
+            }
 
-                    var contenidoNormalizado =
-                        NormalizarTexto(
-                            documento.Contenido);
+            return null;
+        }
 
-                    var textoCompleto =
-                        $"{tituloNormalizado} " +
-                        $"{contenidoNormalizado}";
+        // ============================================================
+        // BÚSQUEDA POR PALABRAS CLAVE
+        // ============================================================
 
-                    // ---------------------------------------------
-                    // Coincidencias generales
-                    // ---------------------------------------------
+        public async Task<string?> BuscarPorPalabrasClaveAsync(
+            string consulta)
+        {
+            if (string.IsNullOrWhiteSpace(consulta))
+                return null;
 
-                    var coincidencias =
-                        palabras.Count(p =>
-                            ContienePalabra(
-                                textoCompleto,
-                                p));
+            // --------------------------------------------------------
+            // Actualidad política:
+            // nunca devolver información histórica del corpus.
+            // --------------------------------------------------------
 
-                    // ---------------------------------------------
-                    // Coincidencias de entidad en título
-                    // ---------------------------------------------
+            if (EsConsultaGobernador(consulta) &&
+                EsConsultaActualidad(consulta))
+            {
+                return null;
+            }
 
-                    var coincidenciasTitulo =
-                        palabrasEntidad.Count(p =>
-                            ContienePalabra(
-                                tituloNormalizado,
-                                p));
+            // --------------------------------------------------------
+            // Consultas meta
+            // --------------------------------------------------------
 
-                    // ---------------------------------------------
-                    // Coincidencias de entidad en contenido
-                    // ---------------------------------------------
+            if (EsConsultaFaltante(consulta))
+            {
+                return await ConstruirRespuestaSobreFaltantesAsync();
+            }
 
-                    var coincidenciasEntidad =
-                        palabrasEntidad.Count(p =>
-                            ContienePalabra(
-                                contenidoNormalizado,
-                                p));
+            if (EsConsultaConocimiento(consulta))
+            {
+                return await ConstruirRespuestaSobreConocimientoAsync();
+            }
 
-                    // ---------------------------------------------
-                    // Coincidencia fuerte
-                    // ---------------------------------------------
+            // --------------------------------------------------------
+            // Datos estructurados
+            // --------------------------------------------------------
 
-                    var coincidenciaFuerte =
-                        ContieneEntidad(
-                            documento.Contenido,
-                            palabrasEntidad);
+            var datoDuro = await BuscarDatoDuroAsync(consulta);
 
-                    // ---------------------------------------------
-                    // Puntuación
-                    // ---------------------------------------------
+            if (!string.IsNullOrWhiteSpace(datoDuro))
+                return datoDuro;
 
-                    var puntuacion = 0;
+            // --------------------------------------------------------
+            // Lugares.
+            //
+            // Solo se utiliza para una consulta claramente referida
+            // a un lugar concreto.
+            // --------------------------------------------------------
 
-                    puntuacion += coincidencias;
+            bool consultaLugar =
+                EsConsultaUbicacion(consulta) ||
+                EsConsultaInformacionLugar(consulta);
 
-                    puntuacion +=
-                        coincidenciasTitulo * 25;
+            if (consultaLugar)
+            {
+                var lugar = await BuscarLugaresAsync(consulta);
 
-                    puntuacion +=
-                        coincidenciasEntidad * 8;
+                if (!string.IsNullOrWhiteSpace(lugar))
+                    return lugar;
+            }
 
-                    if (coincidenciaFuerte)
-                        puntuacion += 50;
+            return null;
+        }
 
-                    // ---------------------------------------------
-                    // Coincidencias al comienzo del documento
-                    // ---------------------------------------------
+        // ============================================================
+        // CORPUS PRINCIPAL
+        // ============================================================
 
-                    var inicioTexto =
-                        contenidoNormalizado.Length > 1200
-                            ? contenidoNormalizado[..1200]
-                            : contenidoNormalizado;
+        public async Task<string?> BuscarEnCorpusAsync(string consulta)
+        {
+            if (string.IsNullOrWhiteSpace(consulta))
+                return null;
 
-                    var coincidenciasInicio =
-                        palabrasEntidad.Count(p =>
-                            ContienePalabra(
-                                inicioTexto,
-                                p));
+            var normalizada = NormalizarTexto(consulta);
 
-                    puntuacion +=
-                        coincidenciasInicio * 3;
+            // --------------------------------------------------------
+            // INTENCIONES
+            // --------------------------------------------------------
 
-                    return new
+            bool esActualidad =
+                EsConsultaActualidad(consulta);
+
+            bool esGobernador =
+                EsConsultaGobernador(consulta);
+
+            bool esPoblacion =
+                EsConsultaPoblacion(consulta);
+
+            bool esMunicipios =
+                EsConsultaMunicipios(consulta);
+
+            bool esLocalidades =
+                EsConsultaLocalidades(consulta);
+
+            bool esDiferenciaCiudadProvincia =
+                EsConsultaDiferenciaCiudadProvincia(consulta);
+
+            bool esFaltante =
+                EsConsultaFaltante(consulta);
+
+            bool esConocimiento =
+                EsConsultaConocimiento(consulta);
+
+            bool esUbicacion =
+                EsConsultaUbicacion(consulta);
+
+            bool esDefinicion =
+                EsConsultaDefinicion(consulta);
+
+            bool esFecha =
+                EsConsultaFecha(consulta);
+
+            // --------------------------------------------------------
+            // GOBERNADOR ACTUAL
+            //
+            // El corpus contiene gobernadores históricos.
+            // Nunca debemos utilizarlos para responder una pregunta
+            // sobre el gobernador actual.
+            // --------------------------------------------------------
+
+            if (esGobernador && esActualidad)
+            {
+                return null;
+            }
+
+            // --------------------------------------------------------
+            // CONSULTAS META
+            // --------------------------------------------------------
+
+            if (esFaltante)
+            {
+                return await ConstruirRespuestaSobreFaltantesAsync();
+            }
+
+            if (esConocimiento)
+            {
+                return await ConstruirRespuestaSobreConocimientoAsync();
+            }
+
+            // --------------------------------------------------------
+            // CARGAR CORPUS
+            // --------------------------------------------------------
+
+            var documentos = await _db.CorpusDocumentos
+                .AsNoTracking()
+                .ToListAsync();
+
+            if (documentos.Count == 0)
+                return null;
+
+            // --------------------------------------------------------
+            // CIUDAD VS PROVINCIA
+            // --------------------------------------------------------
+
+            if (esDiferenciaCiudadProvincia)
+            {
+                return ConstruirRespuestaCiudadVsProvincia(documentos);
+            }
+
+            // --------------------------------------------------------
+            // MUNICIPIOS
+            // --------------------------------------------------------
+
+            if (esMunicipios)
+            {
+                return ConstruirRespuestaMunicipios(documentos);
+            }
+
+            // --------------------------------------------------------
+            // LOCALIDADES
+            // --------------------------------------------------------
+
+            if (esLocalidades)
+            {
+                return ConstruirRespuestaLocalidades(documentos);
+            }
+
+            // --------------------------------------------------------
+            // POBLACIÓN
+            // --------------------------------------------------------
+
+            if (esPoblacion)
+            {
+                return BuscarRespuestaPoblacion(
+                    documentos,
+                    consulta,
+                    normalizada);
+            }
+
+            // --------------------------------------------------------
+            // UBICACIÓN
+            // --------------------------------------------------------
+
+            if (esUbicacion)
+            {
+                return BuscarRespuestaUbicacion(
+                    documentos,
+                    normalizada);
+            }
+
+            // --------------------------------------------------------
+            // DEFINICIÓN
+            // --------------------------------------------------------
+
+            if (esDefinicion)
+            {
+                return BuscarRespuestaDefinicion(
+                    documentos,
+                    normalizada);
+            }
+
+            // --------------------------------------------------------
+            // FECHA
+            // --------------------------------------------------------
+
+            if (esFecha)
+            {
+                return BuscarRespuestaFecha(
+                    documentos,
+                    normalizada);
+            }
+
+            // --------------------------------------------------------
+            // CONSULTA GENERAL
+            // --------------------------------------------------------
+
+            return BuscarRespuestaGeneral(
+                documentos,
+                normalizada);
+        }
+
+        // ============================================================
+        // POBLACIÓN
+        // ============================================================
+
+        private string? BuscarRespuestaPoblacion(
+            IEnumerable<CorpusDocumento> documentos,
+            string consulta,
+            string normalizada)
+        {
+            var lista = documentos.ToList();
+
+            bool mencionaProvincia =
+                ContienePalabra(normalizada, "provincia");
+
+            bool mencionaCapital =
+                ContienePalabra(normalizada, "capital");
+
+            bool mencionaCorrientes =
+                ContieneEntidad(normalizada, "corrientes");
+
+            IEnumerable<CorpusDocumento> candidatos;
+
+            if (mencionaProvincia)
+            {
+                candidatos = lista
+                    .Where(d =>
+                        NormalizarTexto(d.Titulo)
+                            .Contains(
+                                "provincia de corrientes",
+                                StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+            }
+            else if (mencionaCapital)
+            {
+                candidatos = lista
+                    .Where(d =>
+                        NormalizarTexto(d.Titulo)
+                            .Contains(
+                                "corrientes ciudad",
+                                StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+            }
+            else if (mencionaCorrientes)
+            {
+                candidatos = lista
+                    .Where(d =>
                     {
-                        Documento = documento,
-                        Puntuacion = puntuacion,
-                        CoincidenciasEntidad =
-                            coincidenciasEntidad,
-                        CoincidenciasTitulo =
-                            coincidenciasTitulo,
-                        CoincidenciaFuerte =
-                            coincidenciaFuerte
-                    };
-                })
-                .Where(x =>
-                    x.Puntuacion > 0)
-                .OrderByDescending(x =>
-                    x.Puntuacion)
-                .ThenByDescending(x =>
-                    x.CoincidenciaFuerte)
-                .ThenByDescending(x =>
-                    x.CoincidenciasTitulo)
-                .ThenByDescending(x =>
-                    x.CoincidenciasEntidad)
-                .ToList();
+                        var titulo = NormalizarTexto(d.Titulo);
 
-        var mejorResultado =
-            resultados.FirstOrDefault();
-
-        if (mejorResultado is null)
-            return null;
-
-        // =========================================================
-        // VALIDACIÓN CONTRA FALSOS POSITIVOS
-        // =========================================================
-
-        if (esConsultaDefinicion)
-        {
-            if (mejorResultado.CoincidenciasTitulo == 0)
-                return null;
-        }
-
-        // ---------------------------------------------------------
-        // Para ubicación necesitamos que realmente exista
-        // coincidencia con la entidad.
-        // ---------------------------------------------------------
-
-        if (esConsultaUbicacion)
-        {
-            if (mejorResultado.CoincidenciasEntidad == 0)
-                return null;
-        }
-
-        // ---------------------------------------------------------
-        // Para consultas generales exigimos una coincidencia
-        // razonable con la entidad.
-        // ---------------------------------------------------------
-
-        if (!esConsultaDefinicion &&
-    !esConsultaUbicacion)
-{
-    if (mejorResultado.CoincidenciasTitulo == 0)
-        return null;
-}
-
-        var documentoEncontrado =
-            mejorResultado.Documento;
-
-        // =========================================================
-        // CONSULTA DE UBICACIÓN
-        // =========================================================
-
-        if (esConsultaUbicacion)
-        {
-            return
-                BuscarRespuestaUbicacion(
-                    documentoEncontrado,
-                    palabrasEntidad);
-        }
-
-        // =========================================================
-        // CONSULTA DE DEFINICIÓN
-        // =========================================================
-
-        if (esConsultaDefinicion)
-        {
-            var posicionDefinicion =
-                BuscarPosicionDefinicion(
-                    documentoEncontrado,
-                    palabras);
-
-            // -----------------------------------------------------
-            // Si no existe una definición explícita, buscamos la
-            // primera aparición de la entidad.
-            // -----------------------------------------------------
-
-            if (posicionDefinicion < 0)
+                        return titulo.Contains(
+                                   "corrientes ciudad",
+                                   StringComparison.OrdinalIgnoreCase)
+                               ||
+                               titulo.Contains(
+                                   "provincia de corrientes",
+                                   StringComparison.OrdinalIgnoreCase);
+                    })
+                    .ToList();
+            }
+            else
             {
-                posicionDefinicion =
-                    BuscarPosicionEntidad(
-                        documentoEncontrado.Contenido,
-                        palabrasEntidad);
-
-                if (posicionDefinicion < 0)
-                    return null;
+                candidatos = lista;
             }
 
-            var contextoDefinicion =
-                ExtraerOracion(
-                    documentoEncontrado.Contenido,
-                    posicionDefinicion);
-
-            if (string.IsNullOrWhiteSpace(
-                contextoDefinicion))
+            foreach (var documento in candidatos)
             {
-                return null;
-            }
+                var oracion =
+                    BuscarOracionPoblacion(documento.Contenido);
 
-            return
-                $"{documentoEncontrado.Titulo}: " +
-                contextoDefinicion;
-        }
-        // =========================================================
-// CONSULTA DE FECHA / FUNDACIÓN
-// =========================================================
-
-if (esConsultaFecha)
-{
-    var oraciones =
-        documentoEncontrado.Contenido
-            .Split(
-                new[] { '.', '\n' },
-                StringSplitOptions.RemoveEmptyEntries)
-            .Select(o => o.Trim())
-            .Where(o => !string.IsNullOrWhiteSpace(o))
-            .ToList();
-
-    var indicadoresFecha =
-        new[]
-        {
-            "fue fundada",
-            "fue fundado",
-            "fundada en",
-            "fundado en",
-            "fundacion",
-            "fundación",
-            "1588"
-        };
-
-    var oracionFecha =
-        oraciones.FirstOrDefault(o =>
-        {
-            var normalizada =
-                NormalizarTexto(o);
-
-            return indicadoresFecha.Any(indicador =>
-                normalizada.Contains(
-                    NormalizarTexto(indicador),
-                    StringComparison.OrdinalIgnoreCase));
-        });
-
-    if (!string.IsNullOrWhiteSpace(oracionFecha))
-    {
-        return
-            $"{documentoEncontrado.Titulo}: " +
-            oracionFecha;
-    }
-
-    return null;
-}
-        // =========================================================
-        // CONSULTA GENERAL
-        // =========================================================
-
-        var posicion =
-            BuscarPosicionEntidad(
-                documentoEncontrado.Contenido,
-                palabrasEntidad);
-
-        if (posicion < 0)
-        {
-            posicion =
-                BuscarPosicionPalabraRelevante(
-                    documentoEncontrado.Contenido,
-                    palabras);
-        }
-
-        if (posicion < 0)
-            posicion = 0;
-
-        var contexto =
-            ExtraerOracion(
-                documentoEncontrado.Contenido,
-                posicion);
-
-        if (string.IsNullOrWhiteSpace(contexto))
-            return null;
-
-        return
-            $"{documentoEncontrado.Titulo}: " +
-            contexto;
-    }
-
-    // =============================================================
-    // RESPUESTA DE UBICACIÓN
-    // =============================================================
-
-    private static string? BuscarRespuestaUbicacion(
-        CorrientesIA.Data.Models.CorpusDocumento documento,
-        HashSet<string> palabrasEntidad)
-    {
-        if (palabrasEntidad.Count == 0)
-            return null;
-
-        var contenido =
-            documento.Contenido;
-
-        if (string.IsNullOrWhiteSpace(contenido))
-            return null;
-
-        var oraciones =
-            contenido
-                .Split(
-                    new[] { '.', '\n' },
-                    StringSplitOptions.RemoveEmptyEntries)
-                .Select(o => o.Trim())
-                .Where(o =>
-                    !string.IsNullOrWhiteSpace(o))
-                .ToList();
-
-        var indicadoresUbicacion =
-            new[]
-            {
-                "ubicada",
-                "ubicado",
-                "localizada",
-                "localizado",
-                "situada",
-                "situado",
-                "se encuentra",
-                "queda en",
-                "está en",
-                "esta en",
-                "está ubicada",
-                "esta ubicada",
-                "está situado",
-                "esta situado",
-                "pertenece a",
-                "perteneciente a",
-                "a orillas de",
-                "distante de",
-                "a kilómetros de",
-                "a kilometros de"
-            };
-
-        for (
-            int i = 0;
-            i < oraciones.Count;
-            i++)
-        {
-            var oracionNormalizada =
-                NormalizarTexto(
-                    oraciones[i]);
-
-            var contieneEntidad =
-                palabrasEntidad.All(p =>
-                    ContienePalabra(
-                        oracionNormalizada,
-                        p));
-
-            if (!contieneEntidad)
-                continue;
-
-            // -----------------------------------------------------
-            // Primera opción:
-            // la misma oración contiene información de ubicación.
-            // -----------------------------------------------------
-
-            var indicadoresGeograficos =
-                new[]
+                if (!string.IsNullOrWhiteSpace(oracion))
                 {
-                    "provincia de",
-                    "provincia del",
-                    "provincia",
-                    "argentina",
-                    "nordeste",
-                    "noroeste",
-                    "sudeste",
-                    "sudoeste",
-                    "norte",
-                    "sur",
-                    "este",
-                    "oeste",
-                    "región",
-                    "region",
-                    "departamento",
-                    "municipio",
-                    "kilometros de",
-                    "km de"
-                };
+                    return $"{documento.Titulo}: {oracion}";
+                }
+            }
 
-            var contieneUbicacion =
-                indicadoresUbicacion.Any(indicador =>
-                    oracionNormalizada.Contains(
-                        NormalizarTexto(indicador),
-                        StringComparison.OrdinalIgnoreCase))
-                ||
-                indicadoresGeograficos.Any(indicador =>
-                    oracionNormalizada.Contains(
-                        NormalizarTexto(indicador),
+            // --------------------------------------------------------
+            // No hay evidencia suficiente en el corpus.
+            // Es preferible devolver null y permitir WebSearch antes
+            // que inventar o devolver una oración irrelevante.
+            // --------------------------------------------------------
+
+            return null;
+        }
+
+        private string? BuscarOracionPoblacion(string contenido)
+        {
+            if (string.IsNullOrWhiteSpace(contenido))
+                return null;
+
+            var oraciones = SepararOraciones(contenido);
+
+            string? mejor = null;
+            int mejorScore = 0;
+
+            foreach (var oracion in oraciones)
+            {
+                var normalizada =
+                    NormalizarTexto(oracion);
+
+                bool tieneHabitantes =
+                    ContienePalabra(
+                        normalizada,
+                        "habitantes");
+
+                bool tienePoblacion =
+                    ContienePalabra(
+                        normalizada,
+                        "poblacion");
+
+                bool tieneCenso =
+                    ContienePalabra(
+                        normalizada,
+                        "censo");
+
+                bool tieneIndec =
+                    ContienePalabra(
+                        normalizada,
+                        "indec");
+
+                if (!tieneHabitantes &&
+                    !tienePoblacion &&
+                    !tieneCenso &&
+                    !tieneIndec)
+                {
+                    continue;
+                }
+
+                int score = 0;
+
+                if (tieneHabitantes)
+                    score += 50;
+
+                if (tienePoblacion)
+                    score += 30;
+
+                if (tieneCenso)
+                    score += 20;
+
+                if (tieneIndec)
+                    score += 20;
+
+                if (ContieneFecha(normalizada))
+                    score += 10;
+
+                if (score > mejorScore)
+                {
+                    mejorScore = score;
+                    mejor = oracion.Trim();
+                }
+            }
+
+            return mejor;
+        }
+
+        // ============================================================
+        // MUNICIPIOS
+        // ============================================================
+
+        private string? ConstruirRespuestaMunicipios(
+            IEnumerable<CorpusDocumento> documentos)
+        {
+            var nombres = documentos
+                .Where(d =>
+                    EsDocumentoLocalidad(d.Titulo))
+                .Select(d => d.Titulo.Trim())
+                .Where(t => !string.IsNullOrWhiteSpace(t))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (nombres.Count == 0)
+                return null;
+
+            return
+                "En el corpus actual, CorrientesIA tiene información sobre " +
+                "municipios/localidades como " +
+                string.Join(", ", nombres) +
+                ". Esta lista refleja los documentos disponibles " +
+                "actualmente y no necesariamente el registro completo " +
+                "de municipios de la provincia.";
+        }
+
+        // ============================================================
+        // LOCALIDADES
+        // ============================================================
+
+        private string? ConstruirRespuestaLocalidades(
+            IEnumerable<CorpusDocumento> documentos)
+        {
+            var localidades = documentos
+                .Where(d =>
+                    EsDocumentoLocalidad(d.Titulo))
+                .Select(d => d.Titulo.Trim())
+                .Where(t => !string.IsNullOrWhiteSpace(t))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (localidades.Count == 0)
+                return null;
+
+            return
+                "En el corpus actual, CorrientesIA tiene información sobre " +
+                "localidades como " +
+                string.Join(", ", localidades) +
+                ". La lista corresponde a los documentos disponibles " +
+                "actualmente.";
+        }
+
+        // ============================================================
+        // CIUDAD VS PROVINCIA
+        // ============================================================
+
+        private string? ConstruirRespuestaCiudadVsProvincia(
+            IEnumerable<CorpusDocumento> documentos)
+        {
+            var ciudad = documentos.FirstOrDefault(d =>
+                NormalizarTexto(d.Titulo)
+                    .Contains(
+                        "corrientes ciudad",
                         StringComparison.OrdinalIgnoreCase));
 
-            if (contieneUbicacion)
+            var provincia = documentos.FirstOrDefault(d =>
+                NormalizarTexto(d.Titulo)
+                    .Contains(
+                        "provincia de corrientes",
+                        StringComparison.OrdinalIgnoreCase));
+
+            if (ciudad == null || provincia == null)
+                return null;
+
+            return
+                "Corrientes Capital es la ciudad que funciona como capital " +
+                "de la provincia de Corrientes. La ciudad es el principal " +
+                "centro administrativo, social y económico de la provincia, " +
+                "mientras que la Provincia de Corrientes es la entidad " +
+                "territorial provincial a la que pertenece esa ciudad.";
+        }
+
+        // ============================================================
+        // UBICACIÓN
+        // ============================================================
+
+        private string? BuscarRespuestaUbicacion(
+            IEnumerable<CorpusDocumento> documentos,
+            string normalizada)
+        {
+            var entidades =
+                ObtenerEntidadesConsulta(normalizada);
+
+            if (entidades.Count == 0)
+                return null;
+
+            var puntuados =
+                new List<DocumentoPuntuado>();
+
+            foreach (var documento in documentos)
             {
-                return
-                    $"{documento.Titulo}: " +
-                    oraciones[i];
-            }
+                var titulo =
+                    NormalizarTexto(documento.Titulo);
 
-            // -----------------------------------------------------
-            // Segunda opción:
-            // la siguiente oración contiene información de ubicación.
-            // -----------------------------------------------------
+                var contenido =
+                    NormalizarTexto(documento.Contenido);
 
-            if (i + 1 < oraciones.Count)
-            {
-                var siguienteNormalizada =
-                    NormalizarTexto(
-                        oraciones[i + 1]);
+                int score = 0;
 
-                var siguienteEsUbicacion =
-                    indicadoresUbicacion.Any(indicador =>
-                        siguienteNormalizada.Contains(
-                            NormalizarTexto(indicador),
-                            StringComparison.OrdinalIgnoreCase));
-
-                if (siguienteEsUbicacion)
+                foreach (var entidad in entidades)
                 {
-                    return
-                        $"{documento.Titulo}: " +
-                        oraciones[i + 1];
+                    if (ContieneEntidad(titulo, entidad))
+                        score += 100;
+
+                    if (ContieneEntidad(contenido, entidad))
+                        score += 30;
+                }
+
+                if (contenido.Contains(
+                    "ubicado",
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    score += 15;
+                }
+
+                if (contenido.Contains(
+                    "ubicada",
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    score += 15;
+                }
+
+                if (contenido.Contains(
+                    "provincia de corrientes",
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    score += 10;
+                }
+
+                if (score > 0)
+                {
+                    puntuados.Add(
+                        new DocumentoPuntuado(
+                            documento,
+                            score));
                 }
             }
-        }
 
-        // ---------------------------------------------------------
-        // Fallback para lugares mencionados sin ubicación concreta.
-        // ---------------------------------------------------------
-
-        var entidad =
-            ObtenerNombreEntidad(
-                documento,
-                palabrasEntidad);
-
-        if (!string.IsNullOrWhiteSpace(entidad))
-        {
-            return
-                $"{entidad} aparece mencionado como una localidad " +
-                "de la provincia de Corrientes, pero no hay " +
-                "información suficiente en la base para indicar " +
-                "su ubicación exacta.";
-        }
-
-        return null;
-    }
-
-    // =============================================================
-    // IDENTIFICAR ENTIDAD
-    // =============================================================
-
-    private static bool ContieneEntidad(
-        string contenido,
-        HashSet<string> palabrasEntidad)
-    {
-        if (palabrasEntidad.Count == 0)
-            return false;
-
-        var contenidoNormalizado =
-            NormalizarTexto(contenido);
-
-        // ---------------------------------------------------------
-        // Entidad de una sola palabra.
-        // ---------------------------------------------------------
-
-        if (palabrasEntidad.Count == 1)
-        {
-            var palabra =
-                palabrasEntidad.First();
-
-            return ContienePalabra(
-                contenidoNormalizado,
-                palabra);
-        }
-
-        // ---------------------------------------------------------
-        // Entidades de varias palabras.
-        // ---------------------------------------------------------
-
-        var posiciones =
-            palabrasEntidad
-                .Select(p => new
-                {
-                    Palabra = p,
-                    Posicion =
-                        BuscarPalabra(
-                            contenidoNormalizado,
-                            p)
-                })
-                .Where(x =>
-                    x.Posicion >= 0)
-                .OrderBy(x =>
-                    x.Posicion)
-                .ToList();
-
-        if (posiciones.Count !=
-            palabrasEntidad.Count)
-        {
-            return false;
-        }
-
-        var distancia =
-            posiciones.Last().Posicion -
-            posiciones.First().Posicion;
-
-        return distancia <= 80;
-    }
-
-    // =============================================================
-    // POSICIÓN DE ENTIDAD
-    // =============================================================
-
-    private static int BuscarPosicionEntidad(
-        string contenido,
-        HashSet<string> palabrasEntidad)
-    {
-        if (palabrasEntidad.Count == 0)
-            return -1;
-
-        var contenidoNormalizado =
-            NormalizarTexto(contenido);
-
-        var palabrasOrdenadas =
-            palabrasEntidad
-                .OrderByDescending(p =>
-                    p.Length)
-                .ToList();
-
-        foreach (var palabra in palabrasOrdenadas)
-        {
-            var posicion =
-                BuscarPalabra(
-                    contenidoNormalizado,
-                    palabra);
-
-            if (posicion >= 0)
-                return posicion;
-        }
-
-        return -1;
-    }
-
-    // =============================================================
-    // OBTENER NOMBRE DE ENTIDAD
-    // =============================================================
-
-    private static string ObtenerNombreEntidad(
-        CorrientesIA.Data.Models.CorpusDocumento documento,
-        HashSet<string> palabrasEntidad)
-    {
-        var palabrasTitulo =
-            ObtenerPalabrasNormalizadas(
-                documento.Titulo);
-
-        var coincidencias =
-            palabrasTitulo
-                .Where(p =>
-                    palabrasEntidad.Contains(p))
-                .OrderByDescending(p =>
-                    p.Length)
-                .ToList();
-
-        if (coincidencias.Count > 0)
-            return documento.Titulo;
-
-        return string.Join(
-            " ",
-            palabrasEntidad
-                .OrderByDescending(p =>
-                    p.Length));
-    }
-
-    // =============================================================
-    // DEFINICIONES
-    // =============================================================
-
-    private static int BuscarPosicionDefinicion(
-        CorrientesIA.Data.Models.CorpusDocumento documento,
-        HashSet<string> palabrasConsulta)
-    {
-        var contenidoNormalizado =
-            NormalizarTexto(
-                documento.Contenido);
-
-        var tituloNormalizado =
-            NormalizarTexto(
-                documento.Titulo);
-
-        var palabrasGenericas =
-            new HashSet<string>
-            {
-                "que",
-                "significa",
-                "define",
-                "definicion",
-                "es",
-                "son",
-                "el",
-                "la",
-                "los",
-                "las",
-                "un",
-                "una",
-                "del",
-                "de",
-                "se",
-                "como"
-            };
-
-        // ---------------------------------------------------------
-        // Primero priorizamos palabras que aparecen en el título.
-        // ---------------------------------------------------------
-
-        var palabrasTema =
-            palabrasConsulta
-                .Where(p =>
-                    !palabrasGenericas.Contains(p))
-                .Where(p =>
-                    p.Length >= 4)
-                .Where(p =>
-                    ContienePalabra(
-                        tituloNormalizado,
-                        p))
-                .OrderByDescending(p =>
-                    p.Length)
-                .ToList();
-
-        // ---------------------------------------------------------
-        // Si no encontramos coincidencia con el título,
-        // usamos las palabras de tema disponibles.
-        // ---------------------------------------------------------
-
-        if (palabrasTema.Count == 0)
-        {
-            palabrasTema =
-                palabrasConsulta
-                    .Where(p =>
-                        !palabrasGenericas.Contains(p))
-                    .Where(p =>
-                        p.Length >= 4)
-                    .OrderByDescending(p =>
-                        p.Length)
-                    .ToList();
-        }
-
-        foreach (var palabraTema in palabrasTema)
-        {
-            var patrones =
-                new[]
-                {
-                    $"{palabraTema} es ",
-                    $"{palabraTema} es una ",
-                    $"{palabraTema} es un ",
-                    $"{palabraTema} significa ",
-                    $"{palabraTema} consiste en ",
-                    $"{palabraTema} son "
-                };
-
-            foreach (var patron in patrones)
-            {
-                var posicion =
-                    contenidoNormalizado.IndexOf(
-                        patron,
-                        StringComparison.OrdinalIgnoreCase);
-
-                if (posicion >= 0)
-                    return posicion;
-            }
-        }
-
-        return -1;
-    }
-
-    // =============================================================
-    // BÚSQUEDA GENERAL
-    // =============================================================
-
-    private static int BuscarPosicionPalabraRelevante(
-        string contenido,
-        HashSet<string> palabras)
-    {
-        if (palabras.Count == 0)
-            return -1;
-
-        var palabrasContenido =
-            ObtenerPalabrasNormalizadas(
-                contenido);
-
-        var palabraMasRelevante =
-            palabras
-                .OrderByDescending(p =>
-                    palabrasContenido.Count(
-                        x => x == p))
+            var mejor = puntuados
+                .OrderByDescending(x => x.Score)
                 .FirstOrDefault();
 
-        if (palabraMasRelevante is null)
-            return -1;
+            if (mejor == null)
+                return null;
 
-        return BuscarPalabra(
-            NormalizarTexto(contenido),
-            palabraMasRelevante);
-    }
+            var contenidoOriginal =
+                mejor.Documento.Contenido;
 
-    // =============================================================
-    // EXTRACCIÓN DE ORACIÓN
-    // =============================================================
+            var oracion =
+                BuscarOracionUbicacion(
+                    contenidoOriginal);
 
-    private static string ExtraerOracion(
-        string contenido,
-        int posicion)
-    {
-        if (string.IsNullOrWhiteSpace(contenido))
-            return string.Empty;
-
-        posicion =
-            Math.Clamp(
-                posicion,
-                0,
-                contenido.Length - 1);
-
-        var inicioOracion =
-            BuscarInicioBloque(
-                contenido,
-                posicion);
-
-        var finOracion =
-            BuscarFinBloque(
-                contenido,
-                posicion);
-
-        if (finOracion <= inicioOracion)
-            return string.Empty;
-
-        var longitud =
-            Math.Min(
-                700,
-                finOracion - inicioOracion);
-
-        return contenido
-            .Substring(
-                inicioOracion,
-                longitud)
-            .Trim();
-    }
-
-    private static int BuscarInicioBloque(
-        string contenido,
-        int posicion)
-    {
-        var ultimoPunto =
-            contenido.LastIndexOf(
-                '.',
-                posicion);
-
-        var ultimoSalto =
-            contenido.LastIndexOf(
-                '\n',
-                posicion);
-
-        var inicio =
-            Math.Max(
-                ultimoPunto,
-                ultimoSalto);
-
-        inicio++;
-
-        while (
-            inicio < contenido.Length &&
-            char.IsWhiteSpace(
-                contenido[inicio]))
-        {
-            inicio++;
-        }
-
-        return inicio;
-    }
-
-    private static int BuscarFinBloque(
-        string contenido,
-        int posicion)
-    {
-        var siguientePunto =
-            contenido.IndexOf(
-                '.',
-                posicion);
-
-        var siguienteSalto =
-            contenido.IndexOf(
-                '\n',
-                posicion);
-
-        if (siguientePunto < 0)
-            siguientePunto =
-                contenido.Length;
-
-        if (siguienteSalto >= 0)
-        {
-            return Math.Min(
-                siguientePunto,
-                siguienteSalto);
-        }
-
-        return siguientePunto;
-    }
-
-    // =============================================================
-    // NORMALIZACIÓN
-    // =============================================================
-
-    private static HashSet<string>
-        ObtenerPalabrasNormalizadas(
-            string texto)
-    {
-        return NormalizarTexto(texto)
-            .Split(
-                new[]
-                {
-                    ' ',
-                    '\n',
-                    '\r',
-                    '\t',
-                    ',',
-                    '.',
-                    '?',
-                    '!',
-                    ';',
-                    ':',
-                    '¿',
-                    '¡',
-                    '(',
-                    ')',
-                    '"',
-                    '\'',
-                    '-'
-                },
-                StringSplitOptions.RemoveEmptyEntries)
-            .ToHashSet();
-    }
-
-    private static string NormalizarTexto(
-        string texto)
-    {
-        if (string.IsNullOrWhiteSpace(texto))
-            return string.Empty;
-
-        var normalizado =
-            texto.Normalize(
-                NormalizationForm.FormD);
-
-        var caracteres =
-            normalizado
-                .Where(c =>
-                    CharUnicodeInfo.GetUnicodeCategory(c) !=
-                    UnicodeCategory.NonSpacingMark)
-                .ToArray();
-
-        return new string(caracteres)
-            .Normalize(
-                NormalizationForm.FormC)
-            .ToLowerInvariant();
-    }
-
-    // =============================================================
-    // BÚSQUEDA DE PALABRA EXACTA
-    // =============================================================
-
-    private static bool ContienePalabra(
-        string texto,
-        string palabra)
-    {
-        return BuscarPalabra(
-            texto,
-            palabra) >= 0;
-    }
-
-    private static int BuscarPalabra(
-        string texto,
-        string palabra)
-    {
-        if (string.IsNullOrWhiteSpace(texto) ||
-            string.IsNullOrWhiteSpace(palabra))
-        {
-            return -1;
-        }
-
-        var inicio = 0;
-
-        while (inicio < texto.Length)
-        {
-            var posicion =
-                texto.IndexOf(
-                    palabra,
-                    inicio,
-                    StringComparison.OrdinalIgnoreCase);
-
-            if (posicion < 0)
-                return -1;
-
-            var antesValido =
-                posicion == 0 ||
-                !char.IsLetterOrDigit(
-                    texto[posicion - 1]);
-
-            var fin =
-                posicion + palabra.Length;
-
-            var despuesValido =
-                fin >= texto.Length ||
-                !char.IsLetterOrDigit(
-                    texto[fin]);
-
-            if (antesValido &&
-                despuesValido)
+            if (string.IsNullOrWhiteSpace(oracion))
             {
-                return posicion;
+                oracion =
+                    PrimeraOracion(
+                        contenidoOriginal);
             }
 
-            inicio =
-                posicion + palabra.Length;
+            if (string.IsNullOrWhiteSpace(oracion))
+                return null;
+
+            return
+                $"{mejor.Documento.Titulo}: {oracion}";
         }
 
-        return -1;
-    }
-
-    // =============================================================
-    // PALABRAS GENÉRICAS
-    // =============================================================
-
-    private static HashSet<string>
-        ObtenerPalabrasGenericas()
-    {
-        return new HashSet<string>
+        private string? BuscarOracionUbicacion(
+            string contenido)
         {
-            "ciudad",
-            "provincia",
-            "cerca",
+            var oraciones =
+                SepararOraciones(contenido);
 
-            // IMPORTANTE:
-            // "corrientes" NO es genérica porque identifica
-            // directamente a la provincia/ciudad de Corrientes.
+            string? mejor = null;
+            int mejorScore = 0;
 
-            "capital",
-            "lugares",
-            "lugar",
-            "turisticos",
-            "turistico",
-            "turisticas",
-            "turistica",
-            "habitantes",
-            "fecha",
-            "cuando",
-            "donde",
-            "cual",
-            "cuales",
-            "que",
-            "es",
-            "son",
-            "del",
-            "los",
-            "las",
-            "una",
-            "uno",
-            "unos",
-            "unas",
-            "para",
-            "como",
-            "queda",
-            "ubicada",
-            "ubicado",
-            "localizada",
-            "localizado",
-            "significa",
-            "define",
-            "definicion",
-            "esta",
-            "primer",
-            "primera",
-            "segundo",
-            "segunda",
-            "presidente",
-            "presidentes",
-            "quien",
-            "argentina",
-            "pais",
-            "paises",
-            "fluye",
-            "fluyen",
-            "nace",
-            "nacen",
-            "atraviesa",
-            "recorre"
-        };
+            foreach (var oracion in oraciones)
+            {
+                var normalizada =
+                    NormalizarTexto(oracion);
+
+                int score = 0;
+
+                if (ContienePalabra(
+                    normalizada,
+                    "ubicado"))
+                {
+                    score += 50;
+                }
+
+                if (ContienePalabra(
+                    normalizada,
+                    "ubicada"))
+                {
+                    score += 50;
+                }
+
+                if (ContienePalabra(
+                    normalizada,
+                    "provincia"))
+                {
+                    score += 30;
+                }
+
+                if (ContienePalabra(
+                    normalizada,
+                    "corrientes"))
+                {
+                    score += 20;
+                }
+
+                if (ContienePalabra(
+                    normalizada,
+                    "departamento"))
+                {
+                    score += 15;
+                }
+
+                if (score > mejorScore)
+                {
+                    mejorScore = score;
+                    mejor = oracion.Trim();
+                }
+            }
+
+            return mejor;
+        }
+
+        // ============================================================
+        // DEFINICIÓN
+        // ============================================================
+
+        private string? BuscarRespuestaDefinicion(
+            IEnumerable<CorpusDocumento> documentos,
+            string normalizada)
+        {
+            var entidades =
+                ObtenerEntidadesConsulta(normalizada);
+
+            if (entidades.Count == 0)
+                return null;
+
+            var puntuados =
+                new List<DocumentoPuntuado>();
+
+            foreach (var documento in documentos)
+            {
+                var titulo =
+                    NormalizarTexto(documento.Titulo);
+
+                var contenido =
+                    NormalizarTexto(documento.Contenido);
+
+                int score = 0;
+
+                foreach (var entidad in entidades)
+                {
+                    if (ContieneEntidad(titulo, entidad))
+                        score += 100;
+
+                    if (ContieneEntidad(contenido, entidad))
+                        score += 25;
+                }
+
+                if (contenido.Contains(
+                    "es un",
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    score += 15;
+                }
+
+                if (contenido.Contains(
+                    "es una",
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    score += 15;
+                }
+
+                if (score > 0)
+                {
+                    puntuados.Add(
+                        new DocumentoPuntuado(
+                            documento,
+                            score));
+                }
+            }
+
+            var mejor = puntuados
+                .OrderByDescending(x => x.Score)
+                .FirstOrDefault();
+
+            if (mejor == null)
+                return null;
+
+            var oracion =
+                BuscarOracionDefinicion(
+                    mejor.Documento.Contenido);
+
+            if (string.IsNullOrWhiteSpace(oracion))
+                oracion =
+                    PrimeraOracion(
+                        mejor.Documento.Contenido);
+
+            if (string.IsNullOrWhiteSpace(oracion))
+                return null;
+
+            return
+                $"{mejor.Documento.Titulo}: {oracion}";
+        }
+
+        private string? BuscarOracionDefinicion(
+            string contenido)
+        {
+            foreach (var oracion in SepararOraciones(contenido))
+            {
+                var normalizada =
+                    NormalizarTexto(oracion);
+
+                if (normalizada.Contains(
+                        " es un ",
+                        StringComparison.OrdinalIgnoreCase) ||
+                    normalizada.StartsWith(
+                        "es un ",
+                        StringComparison.OrdinalIgnoreCase) ||
+                    normalizada.Contains(
+                        " es una ",
+                        StringComparison.OrdinalIgnoreCase) ||
+                    normalizada.StartsWith(
+                        "es una ",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    return oracion.Trim();
+                }
+            }
+
+            return null;
+        }
+
+        // ============================================================
+        // FECHAS
+        // ============================================================
+
+        private string? BuscarRespuestaFecha(
+            IEnumerable<CorpusDocumento> documentos,
+            string normalizada)
+        {
+            var entidades =
+                ObtenerEntidadesConsulta(normalizada);
+
+            if (entidades.Count == 0)
+                return null;
+
+            var puntuados =
+                new List<DocumentoPuntuado>();
+
+            foreach (var documento in documentos)
+            {
+                var titulo =
+                    NormalizarTexto(documento.Titulo);
+
+                var contenido =
+                    NormalizarTexto(documento.Contenido);
+
+                int score = 0;
+
+                foreach (var entidad in entidades)
+                {
+                    if (ContieneEntidad(titulo, entidad))
+                        score += 100;
+
+                    if (ContieneEntidad(contenido, entidad))
+                        score += 20;
+                }
+
+                if (ContieneFecha(contenido))
+                    score += 20;
+
+                if (score > 0)
+                {
+                    puntuados.Add(
+                        new DocumentoPuntuado(
+                            documento,
+                            score));
+                }
+            }
+
+            var mejor = puntuados
+                .OrderByDescending(x => x.Score)
+                .FirstOrDefault();
+
+            if (mejor == null)
+                return null;
+
+            var oracion =
+                BuscarOracionConFecha(
+                    mejor.Documento.Contenido);
+
+            if (string.IsNullOrWhiteSpace(oracion))
+                return null;
+
+            return
+                $"{mejor.Documento.Titulo}: {oracion}";
+        }
+
+        // ============================================================
+        // CONSULTA GENERAL
+        // ============================================================
+
+        private string? BuscarRespuestaGeneral(
+            IEnumerable<CorpusDocumento> documentos,
+            string normalizada)
+        {
+            var palabras =
+                ObtenerPalabrasRelevantes(
+                    normalizada);
+
+            if (palabras.Count == 0)
+                return null;
+
+            var puntuados =
+                new List<DocumentoPuntuado>();
+
+            foreach (var documento in documentos)
+            {
+                var titulo =
+                    NormalizarTexto(documento.Titulo);
+
+                var contenido =
+                    NormalizarTexto(documento.Contenido);
+
+                int score = 0;
+
+                foreach (var palabra in palabras)
+                {
+                    if (ContienePalabra(
+                        titulo,
+                        palabra))
+                    {
+                        score += 50;
+                    }
+
+                    if (ContienePalabra(
+                        contenido,
+                        palabra))
+                    {
+                        score += 5;
+                    }
+                }
+
+                if (score > 0)
+                {
+                    puntuados.Add(
+                        new DocumentoPuntuado(
+                            documento,
+                            score));
+                }
+            }
+
+            var mejor = puntuados
+                .OrderByDescending(x => x.Score)
+                .FirstOrDefault();
+
+            if (mejor == null)
+                return null;
+
+            var oracion =
+                ObtenerMejorOracion(
+                    mejor.Documento.Contenido,
+                    palabras);
+
+            if (string.IsNullOrWhiteSpace(oracion))
+                return null;
+
+            return
+                $"{mejor.Documento.Titulo}: {oracion}";
+        }
+
+        // ============================================================
+        // RESPUESTA SOBRE LO QUE FALTA
+        // ============================================================
+
+        private async Task<string?>
+            ConstruirRespuestaSobreFaltantesAsync()
+        {
+            var cantidadDocumentos =
+                await _db.CorpusDocumentos
+                    .AsNoTracking()
+                    .CountAsync();
+
+            var cantidadDatosDuros =
+                await _db.DatosDuros
+                    .AsNoTracking()
+                    .CountAsync();
+
+            var respuesta =
+                new StringBuilder();
+
+            respuesta.Append(
+                $"Actualmente CorrientesIA dispone de " +
+                $"{cantidadDocumentos} documentos en su corpus.");
+
+            respuesta.Append(
+                " La información disponible incluye la ciudad y " +
+                "provincia de Corrientes, historia, Esteros del Iberá, " +
+                "parques, chamamé, Río Paraná y distintas localidades.");
+
+            if (cantidadDatosDuros == 0)
+            {
+                respuesta.Append(
+                    " La tabla de datos duros no contiene registros " +
+                    "estructurados actualmente.");
+            }
+
+            respuesta.Append(
+                " Además, las consultas que requieren información " +
+                "actualizada, como autoridades vigentes, no deben " +
+                "resolverse utilizando documentos históricos del corpus.");
+
+            return respuesta.ToString();
+        }
+
+        // ============================================================
+        // RESPUESTA SOBRE LO QUE CONOCE
+        // ============================================================
+
+        private async Task<string?>
+            ConstruirRespuestaSobreConocimientoAsync()
+        {
+            var documentos =
+                await _db.CorpusDocumentos
+                    .AsNoTracking()
+                    .ToListAsync();
+
+            if (documentos.Count == 0)
+                return null;
+
+            var titulos = documentos
+                .Select(d => d.Titulo)
+                .Where(t => !string.IsNullOrWhiteSpace(t))
+                .ToList();
+
+            return
+                $"Actualmente CorrientesIA tiene " +
+                $"{titulos.Count} documentos en su corpus. " +
+                $"Entre los temas disponibles se encuentran: " +
+                $"{string.Join(", ", titulos)}.";
+        }
+
+        // ============================================================
+        // DETECCIÓN DE INTENCIONES
+        // ============================================================
+
+        private bool EsConsultaPoblacion(
+            string consulta)
+        {
+            var texto =
+                NormalizarTexto(consulta);
+
+            return
+                ContienePalabra(
+                    texto,
+                    "poblacion") ||
+                ContienePalabra(
+                    texto,
+                    "habitantes") ||
+                ContienePalabra(
+                    texto,
+                    "censo");
+        }
+
+        private bool EsConsultaGobernador(
+            string consulta)
+        {
+            var texto =
+                NormalizarTexto(consulta);
+
+            return
+                ContienePalabra(
+                    texto,
+                    "gobernador") ||
+                ContienePalabra(
+                    texto,
+                    "gobernadora");
+        }
+
+        private bool EsConsultaMunicipios(
+            string consulta)
+        {
+            var texto =
+                NormalizarTexto(consulta);
+
+            return
+                ContienePalabra(
+                    texto,
+                    "municipio") ||
+                ContienePalabra(
+                    texto,
+                    "municipios");
+        }
+
+        private bool EsConsultaLocalidades(
+            string consulta)
+        {
+            var texto =
+                NormalizarTexto(consulta);
+
+            return
+                ContienePalabra(
+                    texto,
+                    "localidad") ||
+                ContienePalabra(
+                    texto,
+                    "localidades");
+        }
+
+        private bool EsConsultaActualidad(
+            string consulta)
+        {
+            var texto =
+                NormalizarTexto(consulta);
+
+            string[] palabrasActualidad =
+            {
+                "actual",
+                "actualmente",
+                "actualidad",
+                "hoy",
+                "vigente",
+                "vigentes",
+                "actuales",
+                "quien ocupa",
+                "quien es el actual",
+                "quien es la actual"
+            };
+
+            return palabrasActualidad.Any(
+                palabra =>
+                    texto.Contains(
+                        palabra,
+                        StringComparison.OrdinalIgnoreCase));
+        }
+
+        private bool EsConsultaFaltante(
+            string consulta)
+        {
+            var texto =
+                NormalizarTexto(consulta);
+
+            string[] patrones =
+            {
+                "que informacion no tiene",
+                "que informacion le falta",
+                "que datos no tiene",
+                "que no tiene",
+                "que no sabe",
+                "que informacion falta",
+                "que le falta",
+                "que cosas no sabe"
+            };
+
+            return patrones.Any(
+                patron =>
+                    texto.Contains(
+                        patron,
+                        StringComparison.OrdinalIgnoreCase));
+        }
+
+        private bool EsConsultaConocimiento(
+            string consulta)
+        {
+            var texto =
+                NormalizarTexto(consulta);
+
+            string[] patrones =
+            {
+                "que informacion tiene corrientesia",
+                "que sabe corrientesia",
+                "que conoce corrientesia",
+                "que informacion conoce corrientesia",
+                "que tiene corrientesia",
+                "sobre que tiene informacion"
+            };
+
+            return patrones.Any(
+                patron =>
+                    texto.Contains(
+                        patron,
+                        StringComparison.OrdinalIgnoreCase));
+        }
+
+        private bool EsConsultaUbicacion(
+            string consulta)
+        {
+            var texto =
+                NormalizarTexto(consulta);
+
+            return
+                ContienePalabra(
+                    texto,
+                    "donde") ||
+                ContienePalabra(
+                    texto,
+                    "ubicado") ||
+                ContienePalabra(
+                    texto,
+                    "ubicada") ||
+                ContienePalabra(
+                    texto,
+                    "ubicacion") ||
+                ContienePalabra(
+                    texto,
+                    "localizado") ||
+                ContienePalabra(
+                    texto,
+                    "localizada");
+        }
+
+        private bool EsConsultaInformacionLugar(
+            string consulta)
+        {
+            var texto =
+                NormalizarTexto(consulta);
+
+            return texto.Contains(
+                "informacion sobre",
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        private bool EsConsultaDefinicion(
+            string consulta)
+        {
+            var texto =
+                NormalizarTexto(consulta);
+
+            return
+                ContienePalabra(
+                    texto,
+                    "significa") ||
+                ContienePalabra(
+                    texto,
+                    "define") ||
+                ContienePalabra(
+                    texto,
+                    "definicion") ||
+                texto.Contains(
+                    "que es",
+                    StringComparison.OrdinalIgnoreCase);
+        }
+
+        private bool EsConsultaFecha(
+            string consulta)
+        {
+            var texto =
+                NormalizarTexto(consulta);
+
+            return
+                ContienePalabra(
+                    texto,
+                    "cuando") ||
+                ContienePalabra(
+                    texto,
+                    "fecha");
+        }
+
+        private bool EsConsultaDiferenciaCiudadProvincia(
+            string consulta)
+        {
+            var texto =
+                NormalizarTexto(consulta);
+
+            bool diferencia =
+                ContienePalabra(
+                    texto,
+                    "diferencia");
+
+            bool ciudad =
+                ContienePalabra(
+                    texto,
+                    "capital") ||
+                ContienePalabra(
+                    texto,
+                    "ciudad");
+
+            bool provincia =
+                ContienePalabra(
+                    texto,
+                    "provincia");
+
+            return diferencia &&
+                   ciudad &&
+                   provincia;
+        }
+
+        // ============================================================
+        // DOCUMENTOS DE LOCALIDADES
+        // ============================================================
+
+        private bool EsDocumentoLocalidad(
+            string titulo)
+        {
+            var texto =
+                NormalizarTexto(titulo);
+
+            string[] conocidos =
+            {
+                "mercedes",
+                "goya",
+                "ituzaingo",
+                "monte caseros",
+                "saladas",
+                "san roque",
+                "san luis del palmar"
+            };
+
+            return conocidos.Any(
+                nombre =>
+                    texto.Contains(
+                        nombre,
+                        StringComparison.OrdinalIgnoreCase));
+        }
+
+        // ============================================================
+        // ENTIDADES
+        // ============================================================
+
+        private List<string> ObtenerEntidadesConsulta(
+            string normalizada)
+        {
+            var entidades =
+                new List<string>();
+
+            string[] conocidas =
+            {
+                "monte caseros",
+                "san luis del palmar",
+                "san roque",
+                "ituzaingo",
+                "mercedes",
+                "goya",
+                "saladas",
+                "esteros del ibera",
+                "parque nacional ibera",
+                "parque nacional mburucuya",
+                "chamame",
+                "rio parana",
+                "paye",
+                "corrientes"
+            };
+
+            foreach (var entidad in conocidas)
+            {
+                if (ContieneEntidad(
+                    normalizada,
+                    entidad))
+                {
+                    entidades.Add(entidad);
+                }
+            }
+
+            return entidades;
+        }
+
+        // ============================================================
+        // PALABRAS RELEVANTES
+        // ============================================================
+
+        private List<string> ObtenerPalabrasRelevantes(
+            string normalizada)
+        {
+            var genericas =
+                ObtenerPalabrasGenericas();
+
+            return normalizada
+                .Split(
+                    ' ',
+                    StringSplitOptions.RemoveEmptyEntries)
+                .Where(p =>
+                    p.Length >= 3 &&
+                    !genericas.Contains(p))
+                .Distinct()
+                .ToList();
+        }
+
+        private HashSet<string>
+            ObtenerPalabrasGenericas()
+        {
+            return new HashSet<string>(
+                new[]
+                {
+                    "que",
+                    "cual",
+                    "cuales",
+                    "quien",
+                    "quienes",
+                    "como",
+                    "donde",
+                    "cuando",
+                    "porque",
+                    "para",
+                    "con",
+                    "por",
+                    "del",
+                    "de",
+                    "la",
+                    "las",
+                    "el",
+                    "los",
+                    "un",
+                    "una",
+                    "unos",
+                    "unas",
+                    "es",
+                    "son",
+                    "hay",
+                    "tiene",
+                    "tienen",
+                    "informacion",
+                    "sobre",
+                    "corrientes",
+                    "argentina",
+                    "provincia",
+                    "ciudad",
+                    "capital",
+                    "lugar",
+                    "lugares",
+                    "ubicado",
+                    "ubicada",
+                    "ubicacion",
+                    "localizado",
+                    "localizada",
+                    "localidad",
+                    "localidades",
+                    "municipio",
+                    "municipios",
+                    "poblacion",
+                    "habitantes",
+                    "actual",
+                    "actualmente",
+                    "vigente",
+                    "hoy",
+                    "conoce",
+                    "sabe"
+                },
+                StringComparer.OrdinalIgnoreCase);
+        }
+
+        // ============================================================
+        // ORACIONES
+        // ============================================================
+
+        private string? ObtenerMejorOracion(
+            string contenido,
+            IEnumerable<string> palabras)
+        {
+            if (string.IsNullOrWhiteSpace(contenido))
+                return null;
+
+            var oraciones =
+                SepararOraciones(contenido);
+
+            var palabrasLista =
+                palabras
+                    .Select(NormalizarTexto)
+                    .Where(x =>
+                        !string.IsNullOrWhiteSpace(x))
+                    .ToList();
+
+            string? mejor = null;
+            int mejorScore = 0;
+
+            foreach (var oracion in oraciones)
+            {
+                var normalizada =
+                    NormalizarTexto(oracion);
+
+                int score = 0;
+
+                foreach (var palabra in palabrasLista)
+                {
+                    if (ContienePalabra(
+                        normalizada,
+                        palabra))
+                    {
+                        score++;
+                    }
+                }
+
+                if (score > mejorScore)
+                {
+                    mejorScore = score;
+                    mejor = oracion.Trim();
+                }
+            }
+
+            return mejor;
+        }
+
+        private string? BuscarOracionConFecha(
+            string contenido)
+        {
+            if (string.IsNullOrWhiteSpace(contenido))
+                return null;
+
+            foreach (var oracion in SepararOraciones(contenido))
+            {
+                if (ContieneFecha(oracion))
+                    return oracion.Trim();
+            }
+
+            return null;
+        }
+
+        private string PrimeraOracion(
+            string? contenido)
+        {
+            if (string.IsNullOrWhiteSpace(contenido))
+                return string.Empty;
+
+            var oraciones =
+                SepararOraciones(contenido);
+
+            return
+                oraciones.FirstOrDefault()?.Trim()
+                ?? string.Empty;
+        }
+
+        private List<string> SepararOraciones(
+            string contenido)
+        {
+            return contenido
+                .Replace(
+                    "\r\n",
+                    "\n")
+                .Split(
+                    new[]
+                    {
+                        '.',
+                        '!',
+                        '?',
+                        '\n'
+                    },
+                    StringSplitOptions.RemoveEmptyEntries)
+                .Select(x => x.Trim())
+                .Where(x => x.Length > 0)
+                .ToList();
+        }
+
+        // ============================================================
+        // FECHAS
+        // ============================================================
+
+        private bool ContieneFecha(
+            string texto)
+        {
+            if (string.IsNullOrWhiteSpace(texto))
+                return false;
+
+            var normalizado =
+                NormalizarTexto(texto);
+
+            for (int year = 1500;
+                 year <= 2100;
+                 year++)
+            {
+                if (normalizado.Contains(
+                    year.ToString(
+                        CultureInfo.InvariantCulture),
+                    StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        // ============================================================
+        // MATCHING
+        // ============================================================
+
+        private bool ContieneEntidad(
+            string texto,
+            string entidad)
+        {
+            if (string.IsNullOrWhiteSpace(texto) ||
+                string.IsNullOrWhiteSpace(entidad))
+            {
+                return false;
+            }
+
+            var textoNormalizado =
+                NormalizarTexto(texto);
+
+            var entidadNormalizada =
+                NormalizarTexto(entidad);
+
+            if (entidadNormalizada.Contains(' '))
+            {
+                return textoNormalizado.Contains(
+                    entidadNormalizada,
+                    StringComparison.OrdinalIgnoreCase);
+            }
+
+            return ContienePalabra(
+                textoNormalizado,
+                entidadNormalizada);
+        }
+
+        private bool ContienePalabra(
+            string texto,
+            string palabra)
+        {
+            if (string.IsNullOrWhiteSpace(texto) ||
+                string.IsNullOrWhiteSpace(palabra))
+            {
+                return false;
+            }
+
+            var textoNormalizado =
+                NormalizarTexto(texto);
+
+            var palabraNormalizada =
+                NormalizarTexto(palabra);
+
+            var partes =
+                textoNormalizado.Split(
+                    ' ',
+                    StringSplitOptions.RemoveEmptyEntries);
+
+            return partes.Any(
+                parte =>
+                    parte.Equals(
+                        palabraNormalizada,
+                        StringComparison.OrdinalIgnoreCase));
+        }
+
+        // ============================================================
+        // NORMALIZACIÓN
+        // ============================================================
+
+        private string NormalizarTexto(
+            string? texto)
+        {
+            if (string.IsNullOrWhiteSpace(texto))
+                return string.Empty;
+
+            var normalizado =
+                texto.Normalize(
+                    NormalizationForm.FormD);
+
+            var sb =
+                new StringBuilder();
+
+            foreach (var caracter in normalizado)
+            {
+                var categoria =
+                    CharUnicodeInfo.GetUnicodeCategory(
+                        caracter);
+
+                if (categoria ==
+                    UnicodeCategory.NonSpacingMark)
+                {
+                    continue;
+                }
+
+                if (char.IsLetterOrDigit(caracter) ||
+                    char.IsWhiteSpace(caracter))
+                {
+                    sb.Append(
+                        char.ToLowerInvariant(
+                            caracter));
+                }
+                else
+                {
+                    sb.Append(' ');
+                }
+            }
+
+            return string.Join(
+                " ",
+                sb.ToString()
+                    .Split(
+                        ' ',
+                        StringSplitOptions.RemoveEmptyEntries));
+        }
+
+        // ============================================================
+        // TIPO AUXILIAR PARA RANKING
+        // ============================================================
+
+        private sealed class DocumentoPuntuado
+        {
+            public CorpusDocumento Documento { get; }
+            public int Score { get; }
+
+            public DocumentoPuntuado(
+                CorpusDocumento documento,
+                int score)
+            {
+                Documento = documento;
+                Score = score;
+            }
+        }
     }
 }
