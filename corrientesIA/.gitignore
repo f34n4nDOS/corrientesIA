@@ -18,3 +18,5 @@ dist/
 
 # Local development configuration
 **/appsettings.Development.json
+
+publish-linux/
