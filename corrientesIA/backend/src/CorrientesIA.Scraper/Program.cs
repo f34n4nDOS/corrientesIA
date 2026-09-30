@@ -141,6 +141,24 @@ try
     Console.WriteLine(
         "[DB] Conexion MySQL establecida correctamente.");
 
+    // ========================================================
+    // DIAGNOSTICO DE CONEXION
+    // ========================================================
+
+    var dbConnection =
+        db.Database.GetDbConnection();
+
+    Console.WriteLine(
+        $"[DB] Base: {dbConnection.Database}");
+
+    Console.WriteLine(
+        $"[DB] Servidor: {dbConnection.DataSource}");
+
+    Console.WriteLine(
+        "[DB] Tabla objetivo: CorpusDocumentos");
+
+    Console.WriteLine();
+
     Console.WriteLine(
         "Conectado a MySQL. " +
         "Los documentos se guardaran en CorpusDocumentos.\n");
