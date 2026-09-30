@@ -1,3 +1,4 @@
+using System.Net.Http;
 using System.Text;
 using System.Text.RegularExpressions;
 using HtmlAgilityPack;
@@ -5,8 +6,8 @@ using CorrientesIA.Scraper.Models;
 
 namespace CorrientesIA.Scraper.Fetchers;
 
-// Fetcher especifico para articulos de Wikipedia en espanol.
-// Extrae solo los parrafos del cuerpo del articulo (#mw-content-text),
+// Fetcher específico para artículos de Wikipedia en español.
+// Extrae solo los párrafos del cuerpo del artículo (#mw-content-text),
 // descarta tablas, referencias, notas al pie, cajas laterales, etc.
 public class WikipediaFetcher : IContentFetcher
 {
@@ -16,45 +17,79 @@ public class WikipediaFetcher : IContentFetcher
 
     public async Task<ResultadoScrapeo?> FetchAsync(string url)
     {
-        var bytes = await _http.GetByteArrayAsync(url);
-        var html = Encoding.UTF8.GetString(bytes);
+        using var response = await _http.GetAsync(url);
+        response.EnsureSuccessStatusCode();
+        Console.WriteLine(
+    $"[HTTP] {response.Content.Headers.ContentType}");
+
+        // Dejamos que HttpClient interprete correctamente
+        // la codificación declarada por Wikipedia.
+        var bytes = await response.Content.ReadAsByteArrayAsync();
+
+
 
         var doc = new HtmlDocument();
-        doc.LoadHtml(html);
+
+using var stream = new MemoryStream(bytes);
+
+doc.Load(stream, Encoding.UTF8);
 
         var titulo = doc.DocumentNode
             .SelectSingleNode("//h1[@id='firstHeading']")
             ?.InnerText?.Trim() ?? "(sin titulo)";
 
-        var contenedor = doc.DocumentNode.SelectSingleNode("//div[@id='mw-content-text']");
-        if (contenedor == null) return null;
+        var contenedor = doc.DocumentNode
+            .SelectSingleNode("//div[@id='mw-content-text']");
 
-        // Quitamos elementos que no aportan texto util para entrenar:
-        // tablas (infoboxes, tablas de datos), referencias, notas, cajas de navegacion.
+        if (contenedor == null)
+            return null;
+
+        // Quitamos elementos que no aportan texto útil:
+        // tablas, referencias, notas y cajas de navegación.
         var nodosAEliminar = contenedor.SelectNodes(
             ".//table | .//sup[contains(@class,'reference')] | .//div[contains(@class,'navbox')] " +
             "| .//div[contains(@class,'reflist')] | .//ol[contains(@class,'references')] " +
             "| .//div[contains(@class,'infobox')] | .//style | .//script");
 
         if (nodosAEliminar != null)
+        {
             foreach (var nodo in nodosAEliminar)
                 nodo.Remove();
+        }
 
         var parrafos = contenedor.SelectNodes(".//p");
-        if (parrafos == null) return null;
+
+        if (parrafos == null)
+            return null;
 
         var sb = new StringBuilder();
+
         foreach (var p in parrafos)
         {
-            var texto = HtmlEntity.DeEntitize(p.InnerText).Trim();
-            texto = Regex.Replace(texto, @"\[\d+\]", "");        // quitar marcas de referencia [1], [2]...
-            texto = Regex.Replace(texto, @"\s+", " ").Trim();     // colapsar espacios
+            var texto =
+                HtmlEntity.DeEntitize(p.InnerText).Trim();
 
-            if (texto.Length > 30) // descartamos parrafos vacios/ruido
+            texto = Regex.Replace(
+                texto,
+                @"\[\d+\]",
+                "");
+
+            texto = Regex.Replace(
+                texto,
+                @"\s+",
+                " ").Trim();
+
+            if (texto.Length > 30)
                 sb.AppendLine(texto);
         }
 
-        var contenido = sb.ToString().Trim();
-        return contenido.Length < 100 ? null : new ResultadoScrapeo(titulo, contenido);
+        var contenido =
+            sb.ToString().Trim();
+
+        return contenido.Length < 100
+            ? null
+            : new ResultadoScrapeo(
+                titulo,
+                contenido);
     }
 }

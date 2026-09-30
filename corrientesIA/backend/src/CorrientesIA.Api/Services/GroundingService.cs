@@ -51,15 +51,22 @@ namespace CorrientesIA.Api.Services
         // ============================================================
 
         private static readonly string[] Localidades =
-        {
-            "monte caseros",
-            "san luis del palmar",
-            "san roque",
-            "ituzaingo",
-            "mercedes",
-            "goya",
-            "saladas"
-        };
+{
+    "monte caseros",
+    "san luis del palmar",
+    "san roque",
+    "ituzaingo",
+    "mercedes",
+    "goya",
+    "saladas",
+    "alvear",
+    "bella vista",
+    "curuzu cuatia",
+    "esquina",
+    "itati",
+    "paso de los libres",
+    "santo tome"
+};
 
         // ============================================================
         // TURISMO
@@ -920,72 +927,111 @@ namespace CorrientesIA.Api.Services
         // ============================================================
 
         private static string? BuscarRespuestaUbicacion(
-            IReadOnlyList<DocumentoIndexado> documentos,
-            string n)
+    IReadOnlyList<DocumentoIndexado> documentos,
+    string n)
+{
+    var palabras =
+        ObtenerPalabrasRelevantes(n);
+
+    if (palabras.Count == 0)
+        return null;
+
+    DocumentoIndexado? mejor = null;
+    int mejorScore = 0;
+
+    foreach (var documento in documentos)
+    {
+        int score = 0;
+
+        // --------------------------------------------------------
+        // EL TÍTULO ES LA SEÑAL MÁS IMPORTANTE
+        // --------------------------------------------------------
+
+        foreach (var palabra in palabras)
         {
-            var entidades =
-                ObtenerEntidadesConsulta(n);
-
-            if (entidades.Count == 0)
-                return null;
-
-            var mejor =
-                MejorDocumentoPorEntidades(
-                    documentos,
-                    entidades,
-                    pesoContenido: 30,
-                    bonus: d =>
-                    {
-                        int b = 0;
-
-                        if (ContieneFrase(
-                            d.ContenidoNorm,
-                            "ubicado"))
-                        {
-                            b += 15;
-                        }
-
-                        if (ContieneFrase(
-                            d.ContenidoNorm,
-                            "ubicada"))
-                        {
-                            b += 15;
-                        }
-
-                        if (ContieneFrase(
-                            d.ContenidoNorm,
-                            TituloProvincia))
-                        {
-                            b += 10;
-                        }
-
-                        return b;
-                    });
-
-            if (mejor == null)
-                return null;
-
-            var oracion =
-                BuscarOracionUbicacion(
-                    mejor.Contenido);
-            Console.WriteLine(
-    $"[UBICACION-DOC] {mejor.Titulo}");
-            if (string.IsNullOrWhiteSpace(oracion))
-            {
-                oracion =
-                    PrimeraOracion(
-                        mejor.Contenido);
-            }
-
-            return string.IsNullOrWhiteSpace(oracion)
-                ? null
-                : $"{mejor.Titulo}: {oracion}";
+            if (documento.TituloTokens.Contains(palabra))
+                score += 200;
         }
+
+        // --------------------------------------------------------
+        // EL CONTENIDO SIRVE COMO SEÑAL SECUNDARIA
+        // --------------------------------------------------------
+
+        foreach (var palabra in palabras)
+        {
+            if (documento.ContenidoTokens.Contains(palabra))
+                score += 10;
+        }
+
+        // --------------------------------------------------------
+        // REFORZAR CONTENIDO GEOGRÁFICO
+        // --------------------------------------------------------
+
+        if (ContieneFrase(
+            documento.ContenidoNorm,
+            "ubicado"))
+        {
+            score += 30;
+        }
+
+        if (ContieneFrase(
+            documento.ContenidoNorm,
+            "ubicada"))
+        {
+            score += 30;
+        }
+
+        if (ContieneFrase(
+            documento.ContenidoNorm,
+            "se encuentra"))
+        {
+            score += 30;
+        }
+
+        if (ContieneFrase(
+            documento.ContenidoNorm,
+            "provincia de corrientes"))
+        {
+            score += 20;
+        }
+
+        if (score > mejorScore)
+        {
+            mejorScore = score;
+            mejor = documento;
+        }
+    }
+
+    if (mejor == null ||
+        mejorScore == 0)
+    {
+        return null;
+    }
+
+    var oracion =
+        BuscarOracionUbicacion(
+            mejor.Contenido);
+
+    Console.WriteLine(
+        $"[UBICACION-DOC] {mejor.Titulo} | SCORE {mejorScore}");
+
+    if (string.IsNullOrWhiteSpace(oracion))
+    {
+        oracion =
+            PrimeraOracion(
+                mejor.Contenido);
+    }
+
+    return string.IsNullOrWhiteSpace(oracion)
+        ? null
+        : $"{mejor.Titulo}: {oracion}";
+}
 
         private static string? BuscarOracionUbicacion(
     string contenido)
 {
-    var oraciones = SepararOraciones(contenido);
+    var oraciones =
+        SepararOraciones(contenido);
 
     if (oraciones.Count == 0)
         return null;
@@ -995,128 +1041,132 @@ namespace CorrientesIA.Api.Services
 
     foreach (var oracion in oraciones)
     {
-        var norm = NormalizarTexto(oracion);
+        var norm =
+            NormalizarTexto(oracion);
+
         int puntaje = 0;
-        if (ContieneFrase(norm, "en la provincia de corrientes"))
-    puntaje += 200;
 
-if (ContieneFrase(norm, "provincia de corrientes"))
-    puntaje += 180;
+        // ========================================================
+        // UBICACIÓN DIRECTA: máxima prioridad
+        // ========================================================
 
-if (ContieneFrase(norm, "en el nordeste de argentina"))
-    puntaje += 150;
+        if (ContieneFrase(norm, "es una ciudad argentina"))
+            puntaje += 250;
 
-if (ContieneFrase(norm, "en el noreste de argentina"))
-    puntaje += 150;
+        if (ContieneFrase(norm, "es una ciudad"))
+            puntaje += 220;
 
-        // ------------------------------------------------------------
-        // FORMAS DIRECTAS DE UBICACIÓN
-        // ------------------------------------------------------------
+        if (ContieneFrase(norm, "es un municipio"))
+            puntaje += 220;
 
-        if (ContieneFrase(norm, "se encuentra"))
-            puntaje += 80;
-
-        if (ContieneFrase(norm, "se encuentran"))
-            puntaje += 80;
-
-        if (ContieneFrase(norm, "se ubica"))
-            puntaje += 80;
-
-        if (ContieneFrase(norm, "se ubican"))
-            puntaje += 80;
-
-        if (ContieneFrase(norm, "esta ubicado"))
-            puntaje += 75;
+        if (ContieneFrase(norm, "es una localidad"))
+            puntaje += 220;
 
         if (ContieneFrase(norm, "esta ubicada"))
-            puntaje += 75;
+            puntaje += 200;
 
-        if (ContieneFrase(norm, "situado en"))
-            puntaje += 75;
+        if (ContieneFrase(norm, "esta ubicado"))
+            puntaje += 200;
+
+        if (ContieneFrase(norm, "se encuentra"))
+            puntaje += 180;
+
+        if (ContieneFrase(norm, "se ubica"))
+            puntaje += 180;
 
         if (ContieneFrase(norm, "situada en"))
-            puntaje += 75;
+            puntaje += 180;
 
-        if (ContieneFrase(norm, "situados en"))
-            puntaje += 75;
+        if (ContieneFrase(norm, "situado en"))
+            puntaje += 180;
 
-        if (ContieneFrase(norm, "situadas en"))
-            puntaje += 75;
+        if (ContieneFrase(norm, "ubicada en"))
+            puntaje += 180;
 
-        // ------------------------------------------------------------
+        if (ContieneFrase(norm, "ubicado en"))
+            puntaje += 180;
+
+        // ========================================================
         // REFERENCIAS GEOGRÁFICAS
-        // ------------------------------------------------------------
+        // ========================================================
 
-        if (ContieneFrase(norm, "en la provincia"))
-            puntaje += 55;
+        if (ContieneFrase(
+            norm,
+            "provincia de corrientes"))
+        {
+            puntaje += 120;
+        }
 
-        if (ContieneFrase(norm, "en el departamento"))
-            puntaje += 45;
+        if (ContieneFrase(
+            norm,
+            "en la provincia"))
+        {
+            puntaje += 80;
+        }
 
-        if (ContieneFrase(norm, "provincia de corrientes"))
-            puntaje += 50;
-
-        if (ContieneFrase(norm, "corrientes"))
-            puntaje += 20;
+        if (ContieneFrase(
+            norm,
+            "en el departamento"))
+        {
+            puntaje += 60;
+        }
 
         if (ContieneFrase(norm, "argentina"))
-            puntaje += 15;
+            puntaje += 30;
 
         if (ContieneFrase(norm, "nordeste"))
-            puntaje += 25;
+            puntaje += 30;
 
         if (ContieneFrase(norm, "noreste"))
-            puntaje += 25;
+            puntaje += 30;
 
-        if (ContieneFrase(norm, "norte"))
-            puntaje += 15;
+        // ========================================================
+        // OTRAS REFERENCIAS GEOGRÁFICAS
+        // ========================================================
 
-        if (ContieneFrase(norm, "sur"))
-            puntaje += 15;
+        if (ContieneFrase(norm, "a orillas del"))
+            puntaje += 50;
 
-        if (ContieneFrase(norm, "este"))
-            puntaje += 10;
-
-        if (ContieneFrase(norm, "oeste"))
-            puntaje += 10;
-
-        // ------------------------------------------------------------
-        // EXPRESIONES GEOGRÁFICAS
-        // ------------------------------------------------------------
-
-        if (ContieneFrase(norm, "en el nordeste de"))
-            puntaje += 40;
-
-        if (ContieneFrase(norm, "en el noreste de"))
-            puntaje += 40;
+        if (ContieneFrase(norm, "a orilla del"))
+            puntaje += 50;
 
         if (ContieneFrase(norm, "al norte de"))
-            puntaje += 30;
+            puntaje += 40;
 
         if (ContieneFrase(norm, "al sur de"))
-            puntaje += 30;
+            puntaje += 40;
 
         if (ContieneFrase(norm, "cerca de"))
-            puntaje += 20;
+            puntaje += 30;
 
-        // ------------------------------------------------------------
-        // EVITAR FRASES QUE SON PRINCIPALMENTE DESCRIPTIVAS
-        // ------------------------------------------------------------
+        // ========================================================
+        // PENALIZAR INFORMACIÓN NO GEOGRÁFICA
+        // ========================================================
 
-        if (ContieneFrase(norm, "humedal"))
-            puntaje -= 10;
+        if (ContieneFrase(norm, "fue fundada"))
+            puntaje -= 60;
+
+        if (ContieneFrase(norm, "fundada oficialmente"))
+            puntaje -= 60;
+
+        if (ContieneFrase(norm, "nombre"))
+            puntaje -= 50;
+
+        if (ContieneFrase(norm, "general carlos de alvear"))
+            puntaje -= 80;
+
+        if (ContieneFrase(norm, "historia"))
+            puntaje -= 40;
+
+        if (ContieneFrase(norm, "turismo"))
+            puntaje -= 30;
 
         if (ContieneFrase(norm, "fauna"))
-            puntaje -= 10;
+            puntaje -= 30;
 
         if (ContieneFrase(norm, "flora"))
-            puntaje -= 10;
+            puntaje -= 30;
 
-        if (ContieneFrase(norm, "especies"))
-            puntaje -= 10;
-
-        Console.WriteLine(
-    $"[UBICACION] {puntaje} => {oracion}");
         if (puntaje > mejorPuntaje)
         {
             mejorPuntaje = puntaje;
@@ -1132,72 +1182,90 @@ if (ContieneFrase(norm, "en el noreste de argentina"))
         // ============================================================
 
         private static string? BuscarRespuestaDefinicion(
-            IReadOnlyList<DocumentoIndexado> documentos,
-            string n)
+    IReadOnlyList<DocumentoIndexado> documentos,
+    string n)
+{
+    var entidades =
+        ObtenerEntidadesConsulta(n);
+
+    if (entidades.Count == 0)
+        return null;
+
+    // ------------------------------------------------------------
+    // 1. Buscar primero un documento cuyo TÍTULO corresponda
+    //    directamente con la entidad consultada.
+    // ------------------------------------------------------------
+
+    DocumentoIndexado? mejor = null;
+    int mejorScore = 0;
+
+    foreach (var documento in documentos)
+    {
+        int score = 0;
+
+        foreach (var entidad in entidades)
         {
-            var entidades =
-                ObtenerEntidadesConsulta(n);
-
-            if (entidades.Count == 0)
-                return null;
-
-            var mejor =
-                MejorDocumentoPorEntidades(
-                    documentos,
-                    entidades,
-                    pesoContenido: 25,
-                    bonus: d =>
-                    {
-                        int b = 0;
-
-                        if (ContieneFrase(
-                            d.ContenidoNorm,
-                            "es un"))
-                        {
-                            b += 15;
-                        }
-
-                        if (ContieneFrase(
-                            d.ContenidoNorm,
-                            "es una"))
-                        {
-                            b += 15;
-                        }
-
-                        return b;
-                    });
-
-            if (mejor == null)
-                return null;
-
-            // IMPORTANTE:
-            // La oración de definición debe mencionar también
-            // la entidad consultada. Esto evita errores como:
-            //
-            // "¿Qué es el Iberá?"
-            // -> "El carpincho es un roedor herbívoro."
-            //
-            // aunque esa oración esté dentro del mismo documento.
-            var oracion =
-                BuscarOracionDefinicion(
-                    mejor.Contenido,
-                    entidades);
-
-            if (string.IsNullOrWhiteSpace(oracion))
+            if (ContieneFrase(
+                documento.TituloNorm,
+                entidad))
             {
-                // Si no encontramos una definición explícita que
-                // mencione la entidad, usamos la primera oración
-                // del documento, que normalmente representa mejor
-                // el tema principal del artículo.
-                oracion =
-                    PrimeraOracion(
-                        mejor.Contenido);
+                score += 300;
             }
 
-            return string.IsNullOrWhiteSpace(oracion)
-                ? null
-                : $"{mejor.Titulo}: {oracion}";
+            if (ContieneFrase(
+                documento.ContenidoNorm,
+                entidad))
+            {
+                score += 25;
+            }
         }
+
+        if (ContieneFrase(
+            documento.ContenidoNorm,
+            "es un"))
+        {
+            score += 15;
+        }
+
+        if (ContieneFrase(
+            documento.ContenidoNorm,
+            "es una"))
+        {
+            score += 15;
+        }
+
+        if (score > mejorScore)
+        {
+            mejorScore = score;
+            mejor = documento;
+        }
+    }
+
+    if (mejor == null || mejorScore == 0)
+        return null;
+
+    // ------------------------------------------------------------
+    // 2. Buscar una oración de definición que mencione
+    //    explícitamente la entidad consultada.
+    // ------------------------------------------------------------
+
+    var oracion =
+        BuscarOracionDefinicion(
+            mejor.Contenido,
+            entidades);
+
+    // ------------------------------------------------------------
+    // 3. No utilizar PrimeraOracion() como fallback.
+    //    Si no hay una definición válida, es mejor devolver null
+    //    y permitir que el siguiente nivel resuelva la consulta.
+    // ------------------------------------------------------------
+
+    if (string.IsNullOrWhiteSpace(oracion))
+        return null;
+
+    return
+        $"{mejor.Titulo}: {oracion}";
+}
 
         private static string? BuscarOracionDefinicion(
     string contenido,
