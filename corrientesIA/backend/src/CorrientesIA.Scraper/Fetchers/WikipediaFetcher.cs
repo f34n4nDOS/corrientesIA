@@ -16,7 +16,8 @@ public class WikipediaFetcher : IContentFetcher
 
     public async Task<ResultadoScrapeo?> FetchAsync(string url)
     {
-        var html = await _http.GetStringAsync(url);
+        var bytes = await _http.GetByteArrayAsync(url);
+        var html = Encoding.UTF8.GetString(bytes);
 
         var doc = new HtmlDocument();
         doc.LoadHtml(html);

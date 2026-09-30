@@ -13,14 +13,6 @@ namespace CorrientesIA.Api.Services
 {
     /// <summary>
     /// Búsqueda de "grounding" sobre datos duros, lugares y corpus.
-    ///
-    /// Cambios principales respecto a la versión anterior:
-    ///  - El texto de la consulta se normaliza UNA sola vez.
-    ///  - Tablas y corpus se indexan (normalizados + tokens) y se cachean.
-    ///  - Coincidencia por palabra/frase completa (sin falsos positivos por substring).
-    ///  - Separación de oraciones que no rompe números como "358.223".
-    ///  - Los bonus de ranking sólo aplican si hubo coincidencia real con una entidad.
-    ///  - Población: ya no devuelve el documento de otra localidad.
     /// </summary>
     public class GroundingService
     {
@@ -31,14 +23,23 @@ namespace CorrientesIA.Api.Services
         // Configuración
         // ------------------------------------------------------------
 
-        private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
+        private static readonly TimeSpan CacheTtl =
+            TimeSpan.FromMinutes(5);
 
-        private const string CacheDocumentos = "grounding:documentos";
-        private const string CacheDatosDuros = "grounding:datosduros";
-        private const string CacheLugares = "grounding:lugares";
+        private const string CacheDocumentos =
+            "grounding:documentos";
 
-        private const string TituloCiudad = "corrientes ciudad";
-        private const string TituloProvincia = "provincia de corrientes";
+        private const string CacheDatosDuros =
+            "grounding:datosduros";
+
+        private const string CacheLugares =
+            "grounding:lugares";
+
+        private const string TituloCiudad =
+            "corrientes ciudad";
+
+        private const string TituloProvincia =
+            "provincia de corrientes";
 
         private const int LongitudMinimaValorDatoDuro = 3;
         private const int PuntajeMinimoGeneral = 10;
@@ -54,52 +55,119 @@ namespace CorrientesIA.Api.Services
             "saladas"
         };
 
-        // Ordenadas de mayor a menor longitud para detectar primero las más específicas.
-        private static readonly string[] EntidadesOrdenadas = Localidades
-            .Concat(new[]
-            {
-                "esteros del ibera",
-                "parque nacional ibera",
-                "parque nacional mburucuya",
-                "chamame",
-                "rio parana",
-                "paye",
-                "ibera",
-                "mburucuya",
-                "corrientes"
-            })
-            .OrderByDescending(e => e.Length)
-            .ToArray();
+        // Documentos turísticos generales.
+        private static readonly string[] DocumentosTuristicos =
+        {
+            "esteros del ibera",
+            "parque nacional ibera",
+            "parque nacional mburucuya",
+            "chamame",
+            "fiesta nacional del chamame"
+        };
 
-        private static readonly HashSet<string> PalabrasGenericas = new(
-            new[]
-            {
-                "que", "cual", "cuales", "quien", "quienes", "como", "donde",
-                "cuando", "porque", "para", "con", "por", "del", "de", "la",
-                "las", "el", "los", "un", "una", "unos", "unas", "es", "son",
-                "hay", "tiene", "tienen", "informacion", "sobre", "corrientes",
-                "argentina", "provincia", "ciudad", "capital", "lugar",
-                "lugares", "ubicado", "ubicada", "ubicacion", "localizado",
-                "localizada", "localidad", "localidades", "municipio",
-                "municipios", "poblacion", "habitantes", "actual",
-                "actualmente", "vigente", "hoy", "conoce", "sabe"
-            },
-            StringComparer.Ordinal);
+        // Documentos turísticos naturales.
+        private static readonly string[] DocumentosTuristicosNaturales =
+        {
+            "esteros del ibera",
+            "parque nacional ibera",
+            "parque nacional mburucuya"
+        };
 
-        // Años entre 1500 y 2100, con límites de palabra (no matchea "15000").
-        private static readonly Regex RegexAnio = new(
-            @"\b(1[5-9][0-9]{2}|20[0-9]{2}|2100)\b",
-            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        // Entidades ordenadas de mayor a menor longitud.
+        private static readonly string[] EntidadesOrdenadas =
+            Localidades
+                .Concat(new[]
+                {
+                    "esteros del ibera",
+                    "parque nacional ibera",
+                    "parque nacional mburucuya",
+                    "chamame",
+                    "rio parana",
+                    "paye",
+                    "ibera",
+                    "mburucuya",
+                    "corrientes"
+                })
+                .OrderByDescending(e => e.Length)
+                .ToArray();
 
-        // Corta en . ! ? seguidos de espacio, o en saltos de línea.
-        // No corta "358.223 habitantes" ni "1.5 millones".
-        private static readonly Regex RegexOraciones = new(
-            @"(?<=[.!?])\s+|[\r\n]+",
-            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        private static readonly HashSet<string> PalabrasGenericas =
+            new(
+                new[]
+                {
+                    "que",
+                    "cual",
+                    "cuales",
+                    "quien",
+                    "quienes",
+                    "como",
+                    "donde",
+                    "cuando",
+                    "porque",
+                    "para",
+                    "con",
+                    "por",
+                    "del",
+                    "de",
+                    "la",
+                    "las",
+                    "el",
+                    "los",
+                    "un",
+                    "una",
+                    "unos",
+                    "unas",
+                    "es",
+                    "son",
+                    "hay",
+                    "tiene",
+                    "tienen",
+                    "informacion",
+                    "sobre",
+                    "corrientes",
+                    "argentina",
+                    "provincia",
+                    "ciudad",
+                    "capital",
+                    "lugar",
+                    "lugares",
+                    "ubicado",
+                    "ubicada",
+                    "ubicacion",
+                    "localizado",
+                    "localizada",
+                    "localidad",
+                    "localidades",
+                    "municipio",
+                    "municipios",
+                    "poblacion",
+                    "habitantes",
+                    "actual",
+                    "actualmente",
+                    "vigente",
+                    "hoy",
+                    "conoce",
+                    "sabe"
+                },
+                StringComparer.Ordinal);
 
-        private static readonly Regex RegexDigito = new(
-            @"[0-9]",
-            RegexOptions.Compiled | RegexOptions.CultureInvariant);
+        private static readonly Regex RegexAnio =
+            new(
+                @"\b(1[5-9][0-9]{2}|20[0-9]{2}|2100)\b",
+                RegexOptions.Compiled |
+                RegexOptions.CultureInvariant);
+
+        private static readonly Regex RegexOraciones =
+            new(
+                @"(?<=[.!?])\s+|[\r\n]+",
+                RegexOptions.Compiled |
+                RegexOptions.CultureInvariant);
+
+        private static readonly Regex RegexDigito =
+            new(
+                @"[0-9]",
+                RegexOptions.Compiled |
+                RegexOptions.CultureInvariant);
 
         // ------------------------------------------------------------
         // Tipos de índice
@@ -127,25 +195,21 @@ namespace CorrientesIA.Api.Services
             string LocalidadNorm,
             string CategoriaNorm);
 
-        private sealed record DocumentoPuntuado(
-            DocumentoIndexado Documento,
-            int Score);
-
         // ------------------------------------------------------------
         // Constructor
         // ------------------------------------------------------------
 
-        /// <param name="cache">
-        /// Opcional. Si se registra AddMemoryCache() se cachean las tablas
-        /// (si no, funciona igual pero consulta la BD en cada llamada).
-        /// </param>
-        public GroundingService(AppDbContext db, IMemoryCache? cache = null)
+        public GroundingService(
+            AppDbContext db,
+            IMemoryCache? cache = null)
         {
             _db = db;
             _cache = cache;
         }
 
-        /// <summary>Llamar después de modificar corpus, datos duros o lugares.</summary>
+        /// <summary>
+        /// Invalida las cachés después de modificar datos.
+        /// </summary>
         public void InvalidarCache()
         {
             _cache?.Remove(CacheDocumentos);
@@ -157,30 +221,34 @@ namespace CorrientesIA.Api.Services
         // API PÚBLICA
         // ============================================================
 
-        public async Task<string?> BuscarDatoDuroAsync(string consulta)
+        public async Task<string?> BuscarDatoDuroAsync(
+            string consulta)
         {
             if (string.IsNullOrWhiteSpace(consulta))
                 return null;
 
-            return await BuscarDatoDuroInternoAsync(NormalizarTexto(consulta));
+            return await BuscarDatoDuroInternoAsync(
+                NormalizarTexto(consulta));
         }
 
-        public async Task<string?> BuscarLugaresAsync(string consulta)
+        public async Task<string?> BuscarLugaresAsync(
+            string consulta)
         {
             if (string.IsNullOrWhiteSpace(consulta))
                 return null;
 
-            return await BuscarLugaresInternoAsync(NormalizarTexto(consulta));
+            return await BuscarLugaresInternoAsync(
+                NormalizarTexto(consulta));
         }
 
-        public async Task<string?> BuscarPorPalabrasClaveAsync(string consulta)
+        public async Task<string?> BuscarPorPalabrasClaveAsync(
+            string consulta)
         {
             if (string.IsNullOrWhiteSpace(consulta))
                 return null;
 
             var n = NormalizarTexto(consulta);
 
-            // Actualidad política: nunca devolver información histórica del corpus.
             if (EsGobernadorActual(n))
                 return null;
 
@@ -190,25 +258,29 @@ namespace CorrientesIA.Api.Services
             if (EsMetaConocimiento(n))
                 return await ConstruirRespuestaSobreConocimientoAsync();
 
-            var datoDuro = await BuscarDatoDuroInternoAsync(n);
+            var datoDuro =
+                await BuscarDatoDuroInternoAsync(n);
+
             if (!string.IsNullOrWhiteSpace(datoDuro))
                 return datoDuro;
 
-            // Lugares: sólo para consultas claramente referidas a un lugar concreto.
-            if (EsConsultaUbicacion(n) || EsConsultaInformacionLugar(n))
+            if (EsConsultaUbicacion(n) ||
+                EsConsultaInformacionLugar(n))
+            {
                 return await BuscarLugaresInternoAsync(n);
+            }
 
             return null;
         }
 
-        public async Task<string?> BuscarEnCorpusAsync(string consulta)
+        public async Task<string?> BuscarEnCorpusAsync(
+            string consulta)
         {
             if (string.IsNullOrWhiteSpace(consulta))
                 return null;
 
             var n = NormalizarTexto(consulta);
 
-            // El corpus contiene gobernadores históricos: jamás usarlos para "el actual".
             if (EsGobernadorActual(n))
                 return null;
 
@@ -218,52 +290,73 @@ namespace CorrientesIA.Api.Services
             if (EsMetaConocimiento(n))
                 return await ConstruirRespuestaSobreConocimientoAsync();
 
-            var documentos = await ObtenerDocumentosAsync();
+            var documentos =
+                await ObtenerDocumentosAsync();
+
             if (documentos.Count == 0)
                 return null;
 
             if (EsConsultaDiferenciaCiudadProvincia(n))
-                return ConstruirRespuestaCiudadVsProvincia(documentos);
+                return ConstruirRespuestaCiudadVsProvincia(
+                    documentos);
+
+            // --------------------------------------------------------
+            // TURISMO
+            // --------------------------------------------------------
+
+            if (EsConsultaTurismo(n))
+            {
+                return ConstruirRespuestaListaTuristica(
+                    documentos,
+                    n);
+            }
 
             if (EsConsultaMunicipios(n))
-                return ConstruirRespuestaListaLocalidades(documentos, "municipios/localidades",
+            {
+                return ConstruirRespuestaListaLocalidades(
+                    documentos,
+                    "municipios/localidades",
                     ". Esta lista refleja los documentos disponibles actualmente y no " +
                     "necesariamente el registro completo de municipios de la provincia.");
+            }
 
             if (EsConsultaLocalidades(n))
-                return ConstruirRespuestaListaLocalidades(documentos, "localidades",
+            {
+                return ConstruirRespuestaListaLocalidades(
+                    documentos,
+                    "localidades",
                     ". La lista corresponde a los documentos disponibles actualmente.");
+            }
 
             if (EsConsultaPoblacion(n))
-                return BuscarRespuestaPoblacion(documentos, n);
+                return BuscarRespuestaPoblacion(
+                    documentos,
+                    n);
 
             if (EsConsultaUbicacion(n))
-                return BuscarRespuestaUbicacion(documentos, n);
+                return BuscarRespuestaUbicacion(
+                    documentos,
+                    n);
 
             if (EsConsultaDefinicion(n))
-                return BuscarRespuestaDefinicion(documentos, n);
+                return BuscarRespuestaDefinicion(
+                    documentos,
+                    n);
 
             if (EsConsultaFecha(n))
-                return BuscarRespuestaFecha(documentos, n);
+                return BuscarRespuestaFecha(
+                    documentos,
+                    n);
 
-            // Antes acá caía BuscarRespuestaGeneral, que arma una respuesta
-            // pegando "Titulo: oracion". Ese caso ahora lo resuelve el
-            // ChatController con el modelo GptMini entrenado, usando
-            // BuscarContextoGeneralAsync para conseguir el documento
-            // más relevante como contexto — así la respuesta la redacta
-            // el modelo en vez de una plantilla fija.
             return null;
         }
 
         /// <summary>
-        /// Busca el documento del corpus más relevante para una consulta
-        /// "general" (sin coincidencias con las categorías específicas de
-        /// arriba: población, ubicación, definición, fecha, etc). Devuelve
-        /// el título y contenido crudos para que quien llame (el
-        /// ChatController) los use como contexto al generar una respuesta
-        /// con el modelo entrenado, en vez de una plantilla armada acá.
+        /// Busca el documento del corpus más relevante para una
+        /// consulta general.
         /// </summary>
-        public async Task<(string Titulo, string Contenido)?> BuscarContextoGeneralAsync(string consulta)
+        public async Task<(string Titulo, string Contenido)?>
+            BuscarContextoGeneralAsync(string consulta)
         {
             if (string.IsNullOrWhiteSpace(consulta))
                 return null;
@@ -273,11 +366,15 @@ namespace CorrientesIA.Api.Services
             if (EsGobernadorActual(n))
                 return null;
 
-            var documentos = await ObtenerDocumentosAsync();
+            var documentos =
+                await ObtenerDocumentosAsync();
+
             if (documentos.Count == 0)
                 return null;
 
-            var palabras = ObtenerPalabrasRelevantes(n);
+            var palabras =
+                ObtenerPalabrasRelevantes(n);
+
             if (palabras.Count == 0)
                 return null;
 
@@ -304,23 +401,29 @@ namespace CorrientesIA.Api.Services
                 }
             }
 
-            // Un único match débil en el contenido no es evidencia suficiente.
-            if (mejor == null || mejorScore < PuntajeMinimoGeneral)
+            if (mejor == null ||
+                mejorScore < PuntajeMinimoGeneral)
+            {
                 return null;
+            }
 
-            return (mejor.Titulo, mejor.Contenido);
+            return (
+                mejor.Titulo,
+                mejor.Contenido);
         }
 
         // ============================================================
         // DATOS DUROS
         // ============================================================
 
-        private async Task<string?> BuscarDatoDuroInternoAsync(string n)
+        private async Task<string?> BuscarDatoDuroInternoAsync(
+            string n)
         {
             if (n.Length == 0)
                 return null;
 
-            var datos = await ObtenerDatosDurosAsync();
+            var datos =
+                await ObtenerDatosDurosAsync();
 
             DatoDuroIndexado? mejor = null;
             int mejorPeso = 0;
@@ -332,14 +435,19 @@ namespace CorrientesIA.Api.Services
 
                 int peso = 0;
 
-                // Todas las palabras de la clave presentes: gana la clave más específica.
-                if (dato.Palabras.All(p => ContieneFrase(n, p)))
+                if (dato.Palabras.All(
+                    p => ContieneFrase(n, p)))
                 {
-                    peso = 100 + dato.Palabras.Length;
+                    peso =
+                        100 +
+                        dato.Palabras.Length;
                 }
-                // El valor aparece completo en la consulta (mínimo de longitud para evitar ruido).
-                else if (dato.ValorNorm.Length >= LongitudMinimaValorDatoDuro &&
-                         ContieneFrase(n, dato.ValorNorm))
+                else if (
+                    dato.ValorNorm.Length >=
+                    LongitudMinimaValorDatoDuro &&
+                    ContieneFrase(
+                        n,
+                        dato.ValorNorm))
                 {
                     peso = 1;
                 }
@@ -351,19 +459,23 @@ namespace CorrientesIA.Api.Services
                 }
             }
 
-            return mejor == null ? null : $"{mejor.Clave}: {mejor.Valor}";
+            return mejor == null
+                ? null
+                : $"{mejor.Clave}: {mejor.Valor}";
         }
 
         // ============================================================
         // LUGARES
         // ============================================================
 
-        private async Task<string?> BuscarLugaresInternoAsync(string n)
+        private async Task<string?> BuscarLugaresInternoAsync(
+            string n)
         {
             if (n.Length == 0)
                 return null;
 
-            var lugares = await ObtenerLugaresAsync();
+            var lugares =
+                await ObtenerLugaresAsync();
 
             LugarIndexado? mejor = null;
             int mejorPeso = 0;
@@ -373,22 +485,37 @@ namespace CorrientesIA.Api.Services
                 if (lugar.NombreNorm.Length == 0)
                     continue;
 
-                bool coincideNombre = ContieneFrase(n, lugar.NombreNorm);
+                bool coincideNombre =
+                    ContieneFrase(
+                        n,
+                        lugar.NombreNorm);
 
                 bool coincideLocalidad =
                     lugar.LocalidadNorm.Length > 0 &&
-                    ContieneFrase(n, lugar.LocalidadNorm);
+                    ContieneFrase(
+                        n,
+                        lugar.LocalidadNorm);
 
                 bool coincideCategoria =
                     lugar.CategoriaNorm.Length > 0 &&
-                    ContieneFrase(n, lugar.CategoriaNorm);
+                    ContieneFrase(
+                        n,
+                        lugar.CategoriaNorm);
 
                 int peso = 0;
 
                 if (coincideNombre)
-                    peso = 1000 + lugar.NombreNorm.Length; // nombre más largo = más específico
-                else if (coincideLocalidad && coincideCategoria)
+                {
+                    peso =
+                        1000 +
+                        lugar.NombreNorm.Length;
+                }
+                else if (
+                    coincideLocalidad &&
+                    coincideCategoria)
+                {
                     peso = 1;
+                }
 
                 if (peso > mejorPeso)
                 {
@@ -397,7 +524,9 @@ namespace CorrientesIA.Api.Services
                 }
             }
 
-            return mejor == null ? null : $"{mejor.Nombre}: {mejor.Descripcion}";
+            return mejor == null
+                ? null
+                : $"{mejor.Nombre}: {mejor.Descripcion}";
         }
 
         // ============================================================
@@ -408,39 +537,65 @@ namespace CorrientesIA.Api.Services
             IReadOnlyList<DocumentoIndexado> documentos,
             string n)
         {
-            bool mencionaProvincia = ContieneFrase(n, "provincia");
-            bool mencionaCorrientes = ContieneFrase(n, "corrientes");
+            bool mencionaProvincia =
+                ContieneFrase(n, "provincia");
+
+            bool mencionaCorrientes =
+                ContieneFrase(n, "corrientes");
+
             bool mencionaCiudad =
                 ContieneFrase(n, "capital") ||
-                (ContieneFrase(n, "ciudad") && mencionaCorrientes);
+                (
+                    ContieneFrase(n, "ciudad") &&
+                    mencionaCorrientes
+                );
 
-            var localidades = Localidades.Where(l => ContieneFrase(n, l)).ToList();
+            var localidades =
+                Localidades
+                    .Where(l =>
+                        ContieneFrase(n, l))
+                    .ToList();
 
             IEnumerable<DocumentoIndexado> candidatos;
 
             if (localidades.Count > 0)
             {
-                // Antes se devolvía el primer documento con "habitantes", aunque fuera de otra localidad.
-                candidatos = documentos.Where(d =>
-                    localidades.Any(l => ContieneFrase(d.TituloNorm, l)));
+                candidatos =
+                    documentos.Where(d =>
+                        localidades.Any(l =>
+                            ContieneFrase(
+                                d.TituloNorm,
+                                l)));
             }
             else if (mencionaCiudad)
             {
-                candidatos = documentos.Where(d => ContieneFrase(d.TituloNorm, TituloCiudad));
+                candidatos =
+                    documentos.Where(d =>
+                        ContieneFrase(
+                            d.TituloNorm,
+                            TituloCiudad));
             }
             else if (mencionaProvincia)
             {
-                candidatos = documentos.Where(d => ContieneFrase(d.TituloNorm, TituloProvincia));
+                candidatos =
+                    documentos.Where(d =>
+                        ContieneFrase(
+                            d.TituloNorm,
+                            TituloProvincia));
             }
             else if (mencionaCorrientes)
             {
-                candidatos = documentos.Where(d =>
-                    ContieneFrase(d.TituloNorm, TituloCiudad) ||
-                    ContieneFrase(d.TituloNorm, TituloProvincia));
+                candidatos =
+                    documentos.Where(d =>
+                        ContieneFrase(
+                            d.TituloNorm,
+                            TituloCiudad) ||
+                        ContieneFrase(
+                            d.TituloNorm,
+                            TituloProvincia));
             }
             else
             {
-                // Sin objetivo identificable: mejor null (permite WebSearch) que un documento al azar.
                 return null;
             }
 
@@ -449,42 +604,85 @@ namespace CorrientesIA.Api.Services
 
             foreach (var documento in candidatos)
             {
-                var (oracion, score) = BuscarOracionPoblacion(documento.Contenido);
+                var (oracion, score) =
+                    BuscarOracionPoblacion(
+                        documento.Contenido);
 
-                if (oracion != null && score > mejorScore)
+                if (oracion != null &&
+                    score > mejorScore)
                 {
                     mejorScore = score;
-                    mejorRespuesta = $"{documento.Titulo}: {oracion}";
+
+                    mejorRespuesta =
+                        $"{documento.Titulo}: {oracion}";
                 }
             }
 
             return mejorRespuesta;
         }
 
-        private static (string? Oracion, int Score) BuscarOracionPoblacion(string contenido)
+        private static (
+            string? Oracion,
+            int Score
+        ) BuscarOracionPoblacion(
+            string contenido)
         {
             string? mejor = null;
             int mejorScore = 0;
 
-            foreach (var oracion in SepararOraciones(contenido))
+            foreach (var oracion in
+                SepararOraciones(contenido))
             {
-                var norm = NormalizarTexto(oracion);
+                var norm =
+                    NormalizarTexto(oracion);
 
-                bool habitantes = ContieneFrase(norm, "habitantes");
-                bool poblacion = ContieneFrase(norm, "poblacion");
-                bool censo = ContieneFrase(norm, "censo");
-                bool indec = ContieneFrase(norm, "indec");
+                bool habitantes =
+                    ContieneFrase(
+                        norm,
+                        "habitantes");
 
-                if (!habitantes && !poblacion && !censo && !indec)
+                bool poblacion =
+                    ContieneFrase(
+                        norm,
+                        "poblacion");
+
+                bool censo =
+                    ContieneFrase(
+                        norm,
+                        "censo");
+
+                bool indec =
+                    ContieneFrase(
+                        norm,
+                        "indec");
+
+                if (!habitantes &&
+                    !poblacion &&
+                    !censo &&
+                    !indec)
+                {
                     continue;
+                }
 
                 int score = 0;
-                if (habitantes) score += 50;
-                if (poblacion) score += 30;
-                if (censo) score += 20;
-                if (indec) score += 20;
-                if (ContieneFecha(norm)) score += 10;
-                if (RegexDigito.IsMatch(norm)) score += 25; // una cifra vale más que una frase vaga
+
+                if (habitantes)
+                    score += 50;
+
+                if (poblacion)
+                    score += 30;
+
+                if (censo)
+                    score += 20;
+
+                if (indec)
+                    score += 20;
+
+                if (ContieneFecha(norm))
+                    score += 10;
+
+                if (RegexDigito.IsMatch(norm))
+                    score += 25;
 
                 if (score > mejorScore)
                 {
@@ -493,7 +691,9 @@ namespace CorrientesIA.Api.Services
                 }
             }
 
-            return (mejor, mejorScore);
+            return (
+                mejor,
+                mejorScore);
         }
 
         // ============================================================
@@ -505,25 +705,123 @@ namespace CorrientesIA.Api.Services
             string etiqueta,
             string cierre)
         {
-            var nombres = documentos
-                .Where(d => EsDocumentoLocalidad(d.TituloNorm))
-                .Select(d => d.Titulo.Trim())
-                .Where(t => t.Length > 0)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            var nombres =
+                documentos
+                    .Where(d =>
+                        EsDocumentoLocalidad(
+                            d.TituloNorm))
+                    .Select(d =>
+                        d.Titulo.Trim())
+                    .Where(t =>
+                        t.Length > 0)
+                    .Distinct(
+                        StringComparer.OrdinalIgnoreCase)
+                    .ToList();
 
             if (nombres.Count == 0)
                 return null;
 
             return
                 "En el corpus actual, CorrientesIA tiene información sobre " +
-                etiqueta + " como " +
-                string.Join(", ", nombres) +
+                etiqueta +
+                " como " +
+                string.Join(
+                    ", ",
+                    nombres) +
                 cierre;
         }
 
-        private static bool EsDocumentoLocalidad(string tituloNorm) =>
-            Localidades.Any(l => ContieneFrase(tituloNorm, l));
+        // ============================================================
+        // LISTA TURÍSTICA
+        // ============================================================
+
+        private static string? ConstruirRespuestaListaTuristica(
+            IReadOnlyList<DocumentoIndexado> documentos,
+            string n)
+        {
+            // Sólo se aplica el filtro natural si la consulta
+            // realmente pide naturaleza o lugares naturales.
+            bool pideNaturales =
+                ContieneAlguna(
+                    n,
+                    "natural",
+                    "naturales",
+                    "naturaleza",
+                    "atractivos naturales");
+
+            if (pideNaturales)
+            {
+                var naturales =
+                    documentos
+                        .Where(d =>
+                            EsDocumentoTuristicoNatural(
+                                d.TituloNorm))
+                        .Select(d =>
+                            d.Titulo.Trim())
+                        .Where(t =>
+                            t.Length > 0)
+                        .Distinct(
+                            StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+
+                if (naturales.Count == 0)
+                    return null;
+
+                return
+                    "En el corpus actual, CorrientesIA tiene información sobre " +
+                    "estos lugares turísticos naturales: " +
+                    string.Join(
+                        ", ",
+                        naturales) +
+                    ".";
+            }
+
+            // Turismo general.
+            var lugares =
+                documentos
+                    .Where(d =>
+                        EsDocumentoTuristico(
+                            d.TituloNorm))
+                    .Select(d =>
+                        d.Titulo.Trim())
+                    .Where(t =>
+                        t.Length > 0)
+                    .Distinct(
+                        StringComparer.OrdinalIgnoreCase)
+                    .ToList();
+
+            if (lugares.Count == 0)
+                return null;
+
+            return
+                "En el corpus actual, CorrientesIA tiene información sobre " +
+                "estos lugares y atractivos turísticos: " +
+                string.Join(
+                    ", ",
+                    lugares) +
+                ".";
+        }
+
+        private static bool EsDocumentoLocalidad(
+            string tituloNorm) =>
+            Localidades.Any(l =>
+                ContieneFrase(
+                    tituloNorm,
+                    l));
+
+        private static bool EsDocumentoTuristico(
+            string tituloNorm) =>
+            DocumentosTuristicos.Any(t =>
+                ContieneFrase(
+                    tituloNorm,
+                    t));
+
+        private static bool EsDocumentoTuristicoNatural(
+            string tituloNorm) =>
+            DocumentosTuristicosNaturales.Any(t =>
+                ContieneFrase(
+                    tituloNorm,
+                    t));
 
         // ============================================================
         // CIUDAD VS PROVINCIA
@@ -532,8 +830,17 @@ namespace CorrientesIA.Api.Services
         private static string? ConstruirRespuestaCiudadVsProvincia(
             IReadOnlyList<DocumentoIndexado> documentos)
         {
-            bool hayCiudad = documentos.Any(d => ContieneFrase(d.TituloNorm, TituloCiudad));
-            bool hayProvincia = documentos.Any(d => ContieneFrase(d.TituloNorm, TituloProvincia));
+            bool hayCiudad =
+                documentos.Any(d =>
+                    ContieneFrase(
+                        d.TituloNorm,
+                        TituloCiudad));
+
+            bool hayProvincia =
+                documentos.Any(d =>
+                    ContieneFrase(
+                        d.TituloNorm,
+                        TituloProvincia));
 
             if (!hayCiudad || !hayProvincia)
                 return null;
@@ -547,58 +854,119 @@ namespace CorrientesIA.Api.Services
         }
 
         // ============================================================
-        // UBICACIÓN / DEFINICIÓN / FECHA
+        // UBICACIÓN
         // ============================================================
 
         private static string? BuscarRespuestaUbicacion(
             IReadOnlyList<DocumentoIndexado> documentos,
             string n)
         {
-            var entidades = ObtenerEntidadesConsulta(n);
+            var entidades =
+                ObtenerEntidadesConsulta(n);
+
             if (entidades.Count == 0)
                 return null;
 
-            var mejor = MejorDocumentoPorEntidades(
-                documentos,
-                entidades,
-                pesoContenido: 30,
-                bonus: d =>
-                {
-                    int b = 0;
-                    if (ContieneFrase(d.ContenidoNorm, "ubicado")) b += 15;
-                    if (ContieneFrase(d.ContenidoNorm, "ubicada")) b += 15;
-                    if (ContieneFrase(d.ContenidoNorm, TituloProvincia)) b += 10;
-                    return b;
-                });
+            var mejor =
+                MejorDocumentoPorEntidades(
+                    documentos,
+                    entidades,
+                    pesoContenido: 30,
+                    bonus: d =>
+                    {
+                        int b = 0;
+
+                        if (ContieneFrase(
+                            d.ContenidoNorm,
+                            "ubicado"))
+                        {
+                            b += 15;
+                        }
+
+                        if (ContieneFrase(
+                            d.ContenidoNorm,
+                            "ubicada"))
+                        {
+                            b += 15;
+                        }
+
+                        if (ContieneFrase(
+                            d.ContenidoNorm,
+                            TituloProvincia))
+                        {
+                            b += 10;
+                        }
+
+                        return b;
+                    });
 
             if (mejor == null)
                 return null;
 
-            var oracion = BuscarOracionUbicacion(mejor.Contenido);
+            var oracion =
+                BuscarOracionUbicacion(
+                    mejor.Contenido);
 
             if (string.IsNullOrWhiteSpace(oracion))
-                oracion = PrimeraOracion(mejor.Contenido);
+            {
+                oracion =
+                    PrimeraOracion(
+                        mejor.Contenido);
+            }
 
             return string.IsNullOrWhiteSpace(oracion)
                 ? null
                 : $"{mejor.Titulo}: {oracion}";
         }
 
-        private static string? BuscarOracionUbicacion(string contenido)
+        private static string? BuscarOracionUbicacion(
+            string contenido)
         {
             string? mejor = null;
             int mejorScore = 0;
 
-            foreach (var oracion in SepararOraciones(contenido))
+            foreach (var oracion in
+                SepararOraciones(contenido))
             {
-                var norm = NormalizarTexto(oracion);
+                var norm =
+                    NormalizarTexto(oracion);
+
                 int score = 0;
 
-                if (ContieneFrase(norm, "ubicado")) score += 50;
-                if (ContieneFrase(norm, "ubicada")) score += 50;
-                if (ContieneFrase(norm, "provincia")) score += 30;
-                if (ContieneFrase(norm, "corrientes")) score += 20;
-                if (ContieneFrase(norm, "departamento")) score += 15;
+                if (ContieneFrase(
+                    norm,
+                    "ubicado"))
+                {
+                    score += 50;
+                }
+
+                if (ContieneFrase(
+                    norm,
+                    "ubicada"))
+                {
+                    score += 50;
+                }
+
+                if (ContieneFrase(
+                    norm,
+                    "provincia"))
+                {
+                    score += 30;
+                }
+
+                if (ContieneFrase(
+                    norm,
+                    "corrientes"))
+                {
+                    score += 20;
+                }
+
+                if (ContieneFrase(
+                    norm,
+                    "departamento"))
+                {
+                    score += 15;
+                }
 
                 if (score > mejorScore)
                 {
@@ -610,87 +978,139 @@ namespace CorrientesIA.Api.Services
             return mejor;
         }
 
+        // ============================================================
+        // DEFINICIÓN
+        // ============================================================
+
         private static string? BuscarRespuestaDefinicion(
             IReadOnlyList<DocumentoIndexado> documentos,
             string n)
         {
-            var entidades = ObtenerEntidadesConsulta(n);
+            var entidades =
+                ObtenerEntidadesConsulta(n);
+
             if (entidades.Count == 0)
                 return null;
 
-            var mejor = MejorDocumentoPorEntidades(
-                documentos,
-                entidades,
-                pesoContenido: 25,
-                bonus: d =>
-                {
-                    int b = 0;
-                    if (ContieneFrase(d.ContenidoNorm, "es un")) b += 15;
-                    if (ContieneFrase(d.ContenidoNorm, "es una")) b += 15;
-                    return b;
-                });
+            var mejor =
+                MejorDocumentoPorEntidades(
+                    documentos,
+                    entidades,
+                    pesoContenido: 25,
+                    bonus: d =>
+                    {
+                        int b = 0;
+
+                        if (ContieneFrase(
+                            d.ContenidoNorm,
+                            "es un"))
+                        {
+                            b += 15;
+                        }
+
+                        if (ContieneFrase(
+                            d.ContenidoNorm,
+                            "es una"))
+                        {
+                            b += 15;
+                        }
+
+                        return b;
+                    });
 
             if (mejor == null)
                 return null;
 
-            var oracion = BuscarOracionDefinicion(mejor.Contenido);
+            var oracion =
+                BuscarOracionDefinicion(
+                    mejor.Contenido);
 
             if (string.IsNullOrWhiteSpace(oracion))
-                oracion = PrimeraOracion(mejor.Contenido);
+            {
+                oracion =
+                    PrimeraOracion(
+                        mejor.Contenido);
+            }
 
             return string.IsNullOrWhiteSpace(oracion)
                 ? null
                 : $"{mejor.Titulo}: {oracion}";
         }
 
-        private static string? BuscarOracionDefinicion(string contenido)
+        private static string? BuscarOracionDefinicion(
+            string contenido)
         {
-            foreach (var oracion in SepararOraciones(contenido))
+            foreach (var oracion in
+                SepararOraciones(contenido))
             {
-                var norm = NormalizarTexto(oracion);
+                var norm =
+                    NormalizarTexto(oracion);
 
-                if (ContieneFrase(norm, "es un") || ContieneFrase(norm, "es una"))
+                if (ContieneFrase(
+                        norm,
+                        "es un") ||
+                    ContieneFrase(
+                        norm,
+                        "es una"))
+                {
                     return oracion;
+                }
             }
 
             return null;
         }
+
+        // ============================================================
+        // FECHA
+        // ============================================================
 
         private static string? BuscarRespuestaFecha(
             IReadOnlyList<DocumentoIndexado> documentos,
             string n)
         {
-            var entidades = ObtenerEntidadesConsulta(n);
+            var entidades =
+                ObtenerEntidadesConsulta(n);
+
             if (entidades.Count == 0)
                 return null;
 
-            var mejor = MejorDocumentoPorEntidades(
-                documentos,
-                entidades,
-                pesoContenido: 20,
-                bonus: d => ContieneFecha(d.ContenidoNorm) ? 20 : 0);
+            var mejor =
+                MejorDocumentoPorEntidades(
+                    documentos,
+                    entidades,
+                    pesoContenido: 20,
+                    bonus: d =>
+                        ContieneFecha(
+                            d.ContenidoNorm)
+                            ? 20
+                            : 0);
 
             if (mejor == null)
                 return null;
 
-            foreach (var oracion in SepararOraciones(mejor.Contenido))
+            foreach (var oracion in
+                SepararOraciones(mejor.Contenido))
             {
                 if (ContieneFecha(oracion))
-                    return $"{mejor.Titulo}: {oracion}";
+                {
+                    return
+                        $"{mejor.Titulo}: {oracion}";
+                }
             }
 
             return null;
         }
 
-        /// <summary>
-        /// Ranking común. El "bonus" sólo se suma si el documento ya coincidió
-        /// con alguna entidad (antes un bonus solo bastaba para entrar al ranking).
-        /// </summary>
-        private static DocumentoIndexado? MejorDocumentoPorEntidades(
-            IReadOnlyList<DocumentoIndexado> documentos,
-            IReadOnlyList<string> entidades,
-            int pesoContenido,
-            Func<DocumentoIndexado, int> bonus)
+        // ============================================================
+        // RANKING
+        // ============================================================
+
+        private static DocumentoIndexado?
+            MejorDocumentoPorEntidades(
+                IReadOnlyList<DocumentoIndexado> documentos,
+                IReadOnlyList<string> entidades,
+                int pesoContenido,
+                Func<DocumentoIndexado, int> bonus)
         {
             DocumentoIndexado? mejor = null;
             int mejorScore = 0;
@@ -701,11 +1121,19 @@ namespace CorrientesIA.Api.Services
 
                 foreach (var entidad in entidades)
                 {
-                    if (ContieneFrase(documento.TituloNorm, entidad))
+                    if (ContieneFrase(
+                        documento.TituloNorm,
+                        entidad))
+                    {
                         score += 100;
+                    }
 
-                    if (ContieneFrase(documento.ContenidoNorm, entidad))
+                    if (ContieneFrase(
+                        documento.ContenidoNorm,
+                        entidad))
+                    {
                         score += pesoContenido;
+                    }
                 }
 
                 if (score == 0)
@@ -727,12 +1155,17 @@ namespace CorrientesIA.Api.Services
         // RESPUESTAS META
         // ============================================================
 
-        private async Task<string?> ConstruirRespuestaSobreFaltantesAsync()
+        private async Task<string?>
+            ConstruirRespuestaSobreFaltantesAsync()
         {
-            var documentos = await ObtenerDocumentosAsync();
-            var datosDuros = await ObtenerDatosDurosAsync();
+            var documentos =
+                await ObtenerDocumentosAsync();
 
-            var respuesta = new StringBuilder();
+            var datosDuros =
+                await ObtenerDatosDurosAsync();
+
+            var respuesta =
+                new StringBuilder();
 
             respuesta.Append(
                 $"Actualmente CorrientesIA dispone de {documentos.Count} documentos en su corpus.");
@@ -757,57 +1190,106 @@ namespace CorrientesIA.Api.Services
             return respuesta.ToString();
         }
 
-        private async Task<string?> ConstruirRespuestaSobreConocimientoAsync()
+        private async Task<string?>
+            ConstruirRespuestaSobreConocimientoAsync()
         {
-            var documentos = await ObtenerDocumentosAsync();
+            var documentos =
+                await ObtenerDocumentosAsync();
 
-            var titulos = documentos
-                .Select(d => d.Titulo)
-                .Where(t => !string.IsNullOrWhiteSpace(t))
-                .ToList();
+            var titulos =
+                documentos
+                    .Select(d => d.Titulo)
+                    .Where(t =>
+                        !string.IsNullOrWhiteSpace(t))
+                    .ToList();
 
             if (titulos.Count == 0)
                 return null;
 
             return
-                $"Actualmente CorrientesIA tiene {titulos.Count} documentos en su corpus. " +
-                $"Entre los temas disponibles se encuentran: {string.Join(", ", titulos)}.";
+                $"Actualmente CorrientesIA tiene {titulos.Count} documentos " +
+                $"en su corpus. Entre los temas disponibles se encuentran: " +
+                $"{string.Join(", ", titulos)}.";
         }
 
         // ============================================================
         // DETECCIÓN DE INTENCIONES
-        // (todas reciben texto YA normalizado)
         // ============================================================
 
-        private static bool EsGobernadorActual(string n) =>
-            EsConsultaGobernador(n) && EsConsultaActualidad(n);
+        private static bool EsGobernadorActual(
+            string n) =>
+            EsConsultaGobernador(n) &&
+            EsConsultaActualidad(n);
 
-        // "que informacion tiene corrientesia" es prefijo de la variante "... sobre X":
-        // esa variante es una consulta de lugar, no una consulta meta.
-        private static bool EsMetaConocimiento(string n) =>
-            EsConsultaConocimiento(n) && !EsConsultaInformacionLugar(n);
+        private static bool EsMetaConocimiento(
+            string n) =>
+            EsConsultaConocimiento(n) &&
+            !EsConsultaInformacionLugar(n);
 
-        private static bool EsConsultaPoblacion(string n) =>
-            ContieneAlguna(n, "poblacion", "habitantes", "censo");
+        private static bool EsConsultaPoblacion(
+            string n) =>
+            ContieneAlguna(
+                n,
+                "poblacion",
+                "habitantes",
+                "censo");
 
-        private static bool EsConsultaGobernador(string n) =>
-            ContieneAlguna(n, "gobernador", "gobernadora");
+        private static bool EsConsultaGobernador(
+            string n) =>
+            ContieneAlguna(
+                n,
+                "gobernador",
+                "gobernadora");
 
-        private static bool EsConsultaMunicipios(string n) =>
-            ContieneAlguna(n, "municipio", "municipios");
+        private static bool EsConsultaMunicipios(
+            string n) =>
+            ContieneAlguna(
+                n,
+                "municipio",
+                "municipios");
 
-        private static bool EsConsultaLocalidades(string n) =>
-            ContieneAlguna(n, "localidad", "localidades");
+        private static bool EsConsultaLocalidades(
+            string n) =>
+            ContieneAlguna(
+                n,
+                "localidad",
+                "localidades");
 
-        private static bool EsConsultaActualidad(string n) =>
-            ContieneAlguna(n,
-                "actual", "actualmente", "actualidad", "actuales",
-                "hoy", "ahora", "vigente", "vigentes", "gobierna",
-                "quien ocupa", "quien es el gobernador",
-                "quien es el actual", "quien es la actual");
+        private static bool EsConsultaTurismo(
+            string n) =>
+            ContieneAlguna(
+                n,
+                "turismo",
+                "turistico",
+                "turistica",
+                "turisticos",
+                "turisticas",
+                "lugares turisticos",
+                "atractivos turisticos",
+                "atracciones turisticas");
 
-        private static bool EsConsultaFaltante(string n) =>
-            ContieneAlguna(n,
+        private static bool EsConsultaActualidad(
+            string n) =>
+            ContieneAlguna(
+                n,
+                "actual",
+                "actualmente",
+                "actualidad",
+                "actuales",
+                "hoy",
+                "ahora",
+                "vigente",
+                "vigentes",
+                "gobierna",
+                "quien ocupa",
+                "quien es el gobernador",
+                "quien es el actual",
+                "quien es la actual");
+
+        private static bool EsConsultaFaltante(
+            string n) =>
+            ContieneAlguna(
+                n,
                 "que informacion no tiene",
                 "que informacion le falta",
                 "que datos no tiene",
@@ -817,8 +1299,10 @@ namespace CorrientesIA.Api.Services
                 "que le falta",
                 "que cosas no sabe");
 
-        private static bool EsConsultaConocimiento(string n) =>
-            ContieneAlguna(n,
+        private static bool EsConsultaConocimiento(
+            string n) =>
+            ContieneAlguna(
+                n,
                 "que informacion tiene corrientesia",
                 "que sabe corrientesia",
                 "que conoce corrientesia",
@@ -826,60 +1310,103 @@ namespace CorrientesIA.Api.Services
                 "que tiene corrientesia",
                 "sobre que tiene informacion");
 
-        private static bool EsConsultaUbicacion(string n) =>
-            ContieneAlguna(n,
-                "donde", "ubicado", "ubicada", "ubicacion",
-                "localizado", "localizada");
+        private static bool EsConsultaUbicacion(
+            string n) =>
+            ContieneAlguna(
+                n,
+                "donde",
+                "ubicado",
+                "ubicada",
+                "ubicacion",
+                "localizado",
+                "localizada");
 
-        private static bool EsConsultaInformacionLugar(string n) =>
-            ContieneAlguna(n,
+        private static bool EsConsultaInformacionLugar(
+            string n) =>
+            ContieneAlguna(
+                n,
                 "informacion sobre",
                 "que informacion tiene corrientesia sobre",
                 "que informacion conoce corrientesia sobre",
                 "que sabe corrientesia sobre");
 
-        private static bool EsConsultaDefinicion(string n) =>
-            ContieneAlguna(n, "significa", "define", "definicion", "que es");
+        private static bool EsConsultaDefinicion(
+            string n) =>
+            ContieneAlguna(
+                n,
+                "significa",
+                "define",
+                "definicion",
+                "que es");
 
-        private static bool EsConsultaFecha(string n) =>
-            ContieneAlguna(n, "cuando", "fecha", "en que ano");
+        private static bool EsConsultaFecha(
+            string n) =>
+            ContieneAlguna(
+                n,
+                "cuando",
+                "fecha",
+                "en que ano");
 
-        private static bool EsConsultaDiferenciaCiudadProvincia(string n) =>
-            ContieneFrase(n, "diferencia") &&
-            ContieneAlguna(n, "capital", "ciudad") &&
-            ContieneFrase(n, "provincia");
+        private static bool EsConsultaDiferenciaCiudadProvincia(
+            string n) =>
+            ContieneFrase(
+                n,
+                "diferencia") &&
+            ContieneAlguna(
+                n,
+                "capital",
+                "ciudad") &&
+            ContieneFrase(
+                n,
+                "provincia");
 
         // ============================================================
-        // ENTIDADES Y PALABRAS RELEVANTES
+        // ENTIDADES
         // ============================================================
 
-        private static List<string> ObtenerEntidadesConsulta(string n)
+        private static List<string>
+            ObtenerEntidadesConsulta(
+                string n)
         {
-            var entidades = new List<string>();
+            var entidades =
+                new List<string>();
 
-            foreach (var entidad in EntidadesOrdenadas)
+            foreach (var entidad in
+                EntidadesOrdenadas)
             {
-                if (!ContieneFrase(n, entidad))
+                if (!ContieneFrase(
+                    n,
+                    entidad))
+                {
                     continue;
+                }
 
-                // Si ya se detectó una entidad más larga que la contiene, se omite
-                // (evita contar dos veces "esteros del ibera" e "ibera").
-                if (entidades.Any(e => ContieneFrase(e, entidad)))
+                if (entidades.Any(e =>
+                    ContieneFrase(
+                        e,
+                        entidad)))
+                {
                     continue;
+                }
 
                 entidades.Add(entidad);
             }
 
-            // "corrientes" es demasiado genérica cuando hay una entidad concreta.
             if (entidades.Count > 1)
                 entidades.Remove("corrientes");
 
             return entidades;
         }
 
-        private static List<string> ObtenerPalabrasRelevantes(string n) =>
-            n.Split(' ', StringSplitOptions.RemoveEmptyEntries)
-                .Where(p => p.Length >= 3 && !PalabrasGenericas.Contains(p))
+        private static List<string>
+            ObtenerPalabrasRelevantes(
+                string n) =>
+            n.Split(
+                    ' ',
+                    StringSplitOptions.RemoveEmptyEntries)
+                .Where(p =>
+                    p.Length >= 3 &&
+                    !PalabrasGenericas.Contains(p))
                 .Distinct()
                 .ToList();
 
@@ -887,20 +1414,27 @@ namespace CorrientesIA.Api.Services
         // ORACIONES
         // ============================================================
 
-        private static string PrimeraOracion(string? contenido) =>
+        private static string PrimeraOracion(
+            string? contenido) =>
             string.IsNullOrWhiteSpace(contenido)
                 ? string.Empty
-                : SepararOraciones(contenido).FirstOrDefault() ?? string.Empty;
+                : SepararOraciones(contenido)
+                    .FirstOrDefault() ??
+                  string.Empty;
 
-        private static List<string> SepararOraciones(string? contenido)
+        private static List<string>
+            SepararOraciones(
+                string? contenido)
         {
             if (string.IsNullOrWhiteSpace(contenido))
                 return new List<string>();
 
             return RegexOraciones
                 .Split(contenido)
-                .Select(x => x.Trim())
-                .Where(x => x.Length > 0)
+                .Select(x =>
+                    x.Trim())
+                .Where(x =>
+                    x.Length > 0)
                 .ToList();
         }
 
@@ -908,43 +1442,60 @@ namespace CorrientesIA.Api.Services
         // FECHAS
         // ============================================================
 
-        private static bool ContieneFecha(string? texto) =>
-            !string.IsNullOrWhiteSpace(texto) && RegexAnio.IsMatch(texto);
+        private static bool ContieneFecha(
+            string? texto) =>
+            !string.IsNullOrWhiteSpace(texto) &&
+            RegexAnio.IsMatch(texto);
 
         // ============================================================
-        // MATCHING (sobre texto ya normalizado)
+        // MATCHING
         // ============================================================
 
-        private static bool ContieneAlguna(string textoNorm, params string[] frases)
+        private static bool ContieneAlguna(
+            string textoNorm,
+            params string[] frases)
         {
             foreach (var frase in frases)
             {
-                if (ContieneFrase(textoNorm, frase))
+                if (ContieneFrase(
+                    textoNorm,
+                    frase))
+                {
                     return true;
+                }
             }
 
             return false;
         }
 
-        /// <summary>
-        /// Indica si <paramref name="frase"/> aparece en <paramref name="textoNorm"/> como
-        /// palabra o secuencia de palabras completas. Ambos deben estar normalizados.
-        /// Reemplaza a ContienePalabra + ContieneEntidad + Contains por substring,
-        /// sin re-normalizar ni re-dividir el texto en cada llamada.
-        /// </summary>
-        private static bool ContieneFrase(string textoNorm, string frase)
+        private static bool ContieneFrase(
+            string textoNorm,
+            string frase)
         {
-            if (textoNorm.Length == 0 || frase.Length == 0)
+            if (textoNorm.Length == 0 ||
+                frase.Length == 0)
+            {
                 return false;
+            }
 
             int idx = 0;
 
-            while ((idx = textoNorm.IndexOf(frase, idx, StringComparison.Ordinal)) >= 0)
+            while (
+                (idx = textoNorm.IndexOf(
+                    frase,
+                    idx,
+                    StringComparison.Ordinal)) >= 0)
             {
-                int fin = idx + frase.Length;
+                int fin =
+                    idx + frase.Length;
 
-                bool inicioOk = idx == 0 || textoNorm[idx - 1] == ' ';
-                bool finOk = fin == textoNorm.Length || textoNorm[fin] == ' ';
+                bool inicioOk =
+                    idx == 0 ||
+                    textoNorm[idx - 1] == ' ';
+
+                bool finOk =
+                    fin == textoNorm.Length ||
+                    textoNorm[fin] == ' ';
 
                 if (inicioOk && finOk)
                     return true;
@@ -959,23 +1510,36 @@ namespace CorrientesIA.Api.Services
         // NORMALIZACIÓN
         // ============================================================
 
-        private static string NormalizarTexto(string? texto)
+        private static string NormalizarTexto(
+            string? texto)
         {
             if (string.IsNullOrWhiteSpace(texto))
                 return string.Empty;
 
-            var descompuesto = texto.Normalize(NormalizationForm.FormD);
-            var sb = new StringBuilder(descompuesto.Length);
-            bool ultimoFueEspacio = true; // evita espacio inicial y colapsa repetidos
+            var descompuesto =
+                texto.Normalize(
+                    NormalizationForm.FormD);
+
+            var sb =
+                new StringBuilder(
+                    descompuesto.Length);
+
+            bool ultimoFueEspacio = true;
 
             foreach (var c in descompuesto)
             {
-                if (CharUnicodeInfo.GetUnicodeCategory(c) == UnicodeCategory.NonSpacingMark)
+                if (
+                    CharUnicodeInfo.GetUnicodeCategory(c) ==
+                    UnicodeCategory.NonSpacingMark)
+                {
                     continue;
+                }
 
                 if (char.IsLetterOrDigit(c))
                 {
-                    sb.Append(char.ToLowerInvariant(c));
+                    sb.Append(
+                        char.ToLowerInvariant(c));
+
                     ultimoFueEspacio = false;
                 }
                 else if (!ultimoFueEspacio)
@@ -985,92 +1549,166 @@ namespace CorrientesIA.Api.Services
                 }
             }
 
-            if (sb.Length > 0 && sb[^1] == ' ')
+            if (
+                sb.Length > 0 &&
+                sb[^1] == ' ')
+            {
                 sb.Length--;
+            }
 
             return sb.ToString();
         }
 
         // ============================================================
-        // CARGA E INDEXACIÓN (con caché opcional)
+        // CARGA E INDEXACIÓN
         // ============================================================
 
-        private Task<IReadOnlyList<DocumentoIndexado>> ObtenerDocumentosAsync() =>
-            ObtenerCacheadoAsync(CacheDocumentos, async () =>
-            {
-                var filas = await _db.CorpusDocumentos
-                    .AsNoTracking()
-                    .Select(d => new { d.Titulo, d.Contenido })
-                    .ToListAsync();
-
-                return filas
-                    .Select(f => IndexarDocumento(f.Titulo ?? string.Empty, f.Contenido ?? string.Empty))
-                    .ToList();
-            });
-
-        private Task<IReadOnlyList<DatoDuroIndexado>> ObtenerDatosDurosAsync() =>
-            ObtenerCacheadoAsync(CacheDatosDuros, async () =>
-            {
-                var filas = await _db.DatosDuros
-                    .AsNoTracking()
-                    .Select(d => new { d.Clave, d.Valor })
-                    .ToListAsync();
-
-                return filas.Select(f =>
+        private Task<IReadOnlyList<DocumentoIndexado>>
+            ObtenerDocumentosAsync() =>
+            ObtenerCacheadoAsync(
+                CacheDocumentos,
+                async () =>
                 {
-                    var clave = f.Clave ?? string.Empty;
-                    var valor = f.Valor ?? string.Empty;
-                    var claveNorm = NormalizarTexto(clave);
+                    var filas =
+                        await _db.CorpusDocumentos
+                            .AsNoTracking()
+                            .Select(d => new
+                            {
+                                d.Titulo,
+                                d.Contenido
+                            })
+                            .ToListAsync();
 
-                    return new DatoDuroIndexado(
-                        clave,
-                        valor,
-                        claveNorm,
-                        claveNorm.Split(' ', StringSplitOptions.RemoveEmptyEntries),
-                        NormalizarTexto(valor));
-                }).ToList();
-            });
+                    return filas
+                        .Select(f =>
+                            IndexarDocumento(
+                                f.Titulo ??
+                                string.Empty,
+                                f.Contenido ??
+                                string.Empty))
+                        .ToList();
+                });
 
-        private Task<IReadOnlyList<LugarIndexado>> ObtenerLugaresAsync() =>
-            ObtenerCacheadoAsync(CacheLugares, async () =>
-            {
-                var filas = await _db.Lugares
-                    .AsNoTracking()
-                    .Select(l => new { l.Nombre, l.Descripcion, l.Localidad, l.Categoria })
-                    .ToListAsync();
+        private Task<IReadOnlyList<DatoDuroIndexado>>
+            ObtenerDatosDurosAsync() =>
+            ObtenerCacheadoAsync(
+                CacheDatosDuros,
+                async () =>
+                {
+                    var filas =
+                        await _db.DatosDuros
+                            .AsNoTracking()
+                            .Select(d => new
+                            {
+                                d.Clave,
+                                d.Valor
+                            })
+                            .ToListAsync();
 
-                return filas.Select(f => new LugarIndexado(
-                    f.Nombre ?? string.Empty,
-                    f.Descripcion ?? string.Empty,
-                    NormalizarTexto(f.Nombre),
-                    NormalizarTexto(f.Localidad),
-                    NormalizarTexto(f.Categoria))).ToList();
-            });
+                    return filas
+                        .Select(f =>
+                        {
+                            var clave =
+                                f.Clave ??
+                                string.Empty;
 
-        private async Task<IReadOnlyList<T>> ObtenerCacheadoAsync<T>(
-            string clave,
-            Func<Task<List<T>>> cargar)
+                            var valor =
+                                f.Valor ??
+                                string.Empty;
+
+                            var claveNorm =
+                                NormalizarTexto(
+                                    clave);
+
+                            return new DatoDuroIndexado(
+                                clave,
+                                valor,
+                                claveNorm,
+                                claveNorm.Split(
+                                    ' ',
+                                    StringSplitOptions
+                                        .RemoveEmptyEntries),
+                                NormalizarTexto(
+                                    valor));
+                        })
+                        .ToList();
+                });
+
+        private Task<IReadOnlyList<LugarIndexado>>
+            ObtenerLugaresAsync() =>
+            ObtenerCacheadoAsync(
+                CacheLugares,
+                async () =>
+                {
+                    var filas =
+                        await _db.Lugares
+                            .AsNoTracking()
+                            .Select(l => new
+                            {
+                                l.Nombre,
+                                l.Descripcion,
+                                l.Localidad,
+                                l.Categoria
+                            })
+                            .ToListAsync();
+
+                    return filas
+                        .Select(f =>
+                            new LugarIndexado(
+                                f.Nombre ??
+                                string.Empty,
+                                f.Descripcion ??
+                                string.Empty,
+                                NormalizarTexto(
+                                    f.Nombre),
+                                NormalizarTexto(
+                                    f.Localidad),
+                                NormalizarTexto(
+                                    f.Categoria)))
+                        .ToList();
+                });
+
+        private async Task<IReadOnlyList<T>>
+            ObtenerCacheadoAsync<T>(
+                string clave,
+                Func<Task<List<T>>> cargar)
         {
-            if (_cache != null &&
-                _cache.TryGetValue(clave, out IReadOnlyList<T>? existente) &&
+            if (
+                _cache != null &&
+                _cache.TryGetValue(
+                    clave,
+                    out IReadOnlyList<T>? existente) &&
                 existente != null)
             {
                 return existente;
             }
 
-            var datos = await cargar();
+            var datos =
+                await cargar();
 
-            // No se cachean listas vacías: así una tabla recién poblada se ve de inmediato.
-            if (_cache != null && datos.Count > 0)
-                _cache.Set(clave, (IReadOnlyList<T>)datos, CacheTtl);
+            if (
+                _cache != null &&
+                datos.Count > 0)
+            {
+                _cache.Set(
+                    clave,
+                    (IReadOnlyList<T>)datos,
+                    CacheTtl);
+            }
 
             return datos;
         }
 
-        private static DocumentoIndexado IndexarDocumento(string titulo, string contenido)
+        private static DocumentoIndexado
+            IndexarDocumento(
+                string titulo,
+                string contenido)
         {
-            var tituloNorm = NormalizarTexto(titulo);
-            var contenidoNorm = NormalizarTexto(contenido);
+            var tituloNorm =
+                NormalizarTexto(titulo);
+
+            var contenidoNorm =
+                NormalizarTexto(contenido);
 
             return new DocumentoIndexado(
                 titulo,
@@ -1081,7 +1719,14 @@ namespace CorrientesIA.Api.Services
                 Tokenizar(contenidoNorm));
         }
 
-        private static HashSet<string> Tokenizar(string textoNorm) =>
-            new(textoNorm.Split(' ', StringSplitOptions.RemoveEmptyEntries), StringComparer.Ordinal);
+        private static HashSet<string>
+            Tokenizar(
+                string textoNorm) =>
+            new(
+                textoNorm.Split(
+                    ' ',
+                    StringSplitOptions
+                        .RemoveEmptyEntries),
+                StringComparer.Ordinal);
     }
 }
