@@ -12,16 +12,17 @@ using Microsoft.Extensions.Caching.Memory;
 namespace CorrientesIA.Api.Services
 {
     /// <summary>
-    /// Búsqueda de "grounding" sobre datos duros, lugares y corpus.
+    /// Servicio de búsqueda y grounding sobre datos duros,
+    /// lugares y documentos del corpus.
     /// </summary>
     public class GroundingService
     {
         private readonly AppDbContext _db;
         private readonly IMemoryCache? _cache;
 
-        // ------------------------------------------------------------
-        // Configuración
-        // ------------------------------------------------------------
+        // ============================================================
+        // CONFIGURACIÓN
+        // ============================================================
 
         private static readonly TimeSpan CacheTtl =
             TimeSpan.FromMinutes(5);
@@ -42,7 +43,12 @@ namespace CorrientesIA.Api.Services
             "provincia de corrientes";
 
         private const int LongitudMinimaValorDatoDuro = 3;
+
         private const int PuntajeMinimoGeneral = 10;
+
+        // ============================================================
+        // LOCALIDADES CONOCIDAS
+        // ============================================================
 
         private static readonly string[] Localidades =
         {
@@ -55,7 +61,10 @@ namespace CorrientesIA.Api.Services
             "saladas"
         };
 
-        // Documentos turísticos generales.
+        // ============================================================
+        // TURISMO
+        // ============================================================
+
         private static readonly string[] DocumentosTuristicos =
         {
             "esteros del ibera",
@@ -65,7 +74,6 @@ namespace CorrientesIA.Api.Services
             "fiesta nacional del chamame"
         };
 
-        // Documentos turísticos naturales.
         private static readonly string[] DocumentosTuristicosNaturales =
         {
             "esteros del ibera",
@@ -73,23 +81,31 @@ namespace CorrientesIA.Api.Services
             "parque nacional mburucuya"
         };
 
-        // Entidades ordenadas de mayor a menor longitud.
+        // ============================================================
+        // ENTIDADES
+        // ============================================================
+
         private static readonly string[] EntidadesOrdenadas =
             Localidades
-                .Concat(new[]
-                {
-                    "esteros del ibera",
-                    "parque nacional ibera",
-                    "parque nacional mburucuya",
-                    "chamame",
-                    "rio parana",
-                    "paye",
-                    "ibera",
-                    "mburucuya",
-                    "corrientes"
-                })
+                .Concat(
+                    new[]
+                    {
+                        "esteros del ibera",
+                        "parque nacional ibera",
+                        "parque nacional mburucuya",
+                        "chamame",
+                        "rio parana",
+                        "paye",
+                        "ibera",
+                        "mburucuya",
+                        "corrientes"
+                    })
                 .OrderByDescending(e => e.Length)
                 .ToArray();
+
+        // ============================================================
+        // PALABRAS GENÉRICAS
+        // ============================================================
 
         private static readonly HashSet<string> PalabrasGenericas =
             new(
@@ -151,6 +167,10 @@ namespace CorrientesIA.Api.Services
                 },
                 StringComparer.Ordinal);
 
+        // ============================================================
+        // REGEX
+        // ============================================================
+
         private static readonly Regex RegexAnio =
             new(
                 @"\b(1[5-9][0-9]{2}|20[0-9]{2}|2100)\b",
@@ -169,9 +189,9 @@ namespace CorrientesIA.Api.Services
                 RegexOptions.Compiled |
                 RegexOptions.CultureInvariant);
 
-        // ------------------------------------------------------------
-        // Tipos de índice
-        // ------------------------------------------------------------
+        // ============================================================
+        // TIPOS DE ÍNDICE
+        // ============================================================
 
         private sealed record DocumentoIndexado(
             string Titulo,
@@ -195,9 +215,9 @@ namespace CorrientesIA.Api.Services
             string LocalidadNorm,
             string CategoriaNorm);
 
-        // ------------------------------------------------------------
-        // Constructor
-        // ------------------------------------------------------------
+        // ============================================================
+        // CONSTRUCTOR
+        // ============================================================
 
         public GroundingService(
             AppDbContext db,
@@ -206,6 +226,10 @@ namespace CorrientesIA.Api.Services
             _db = db;
             _cache = cache;
         }
+
+        // ============================================================
+        // CACHE
+        // ============================================================
 
         /// <summary>
         /// Invalida las cachés después de modificar datos.
@@ -264,11 +288,11 @@ namespace CorrientesIA.Api.Services
             if (!string.IsNullOrWhiteSpace(datoDuro))
                 return datoDuro;
 
-            if (EsConsultaUbicacion(n) ||
-                EsConsultaInformacionLugar(n))
-            {
-                return await BuscarLugaresInternoAsync(n);
-            }
+            if (EsConsultaInformacionLugar(n) &&
+    !EsConsultaUbicacion(n))
+{
+    return await BuscarLugaresInternoAsync(n);
+}
 
             return null;
         }
@@ -296,9 +320,15 @@ namespace CorrientesIA.Api.Services
             if (documentos.Count == 0)
                 return null;
 
+            // --------------------------------------------------------
+            // CIUDAD VS PROVINCIA
+            // --------------------------------------------------------
+
             if (EsConsultaDiferenciaCiudadProvincia(n))
+            {
                 return ConstruirRespuestaCiudadVsProvincia(
                     documentos);
+            }
 
             // --------------------------------------------------------
             // TURISMO
@@ -311,6 +341,10 @@ namespace CorrientesIA.Api.Services
                     n);
             }
 
+            // --------------------------------------------------------
+            // MUNICIPIOS
+            // --------------------------------------------------------
+
             if (EsConsultaMunicipios(n))
             {
                 return ConstruirRespuestaListaLocalidades(
@@ -320,6 +354,10 @@ namespace CorrientesIA.Api.Services
                     "necesariamente el registro completo de municipios de la provincia.");
             }
 
+            // --------------------------------------------------------
+            // LOCALIDADES
+            // --------------------------------------------------------
+
             if (EsConsultaLocalidades(n))
             {
                 return ConstruirRespuestaListaLocalidades(
@@ -328,25 +366,49 @@ namespace CorrientesIA.Api.Services
                     ". La lista corresponde a los documentos disponibles actualmente.");
             }
 
+            // --------------------------------------------------------
+            // POBLACIÓN
+            // --------------------------------------------------------
+
             if (EsConsultaPoblacion(n))
+            {
                 return BuscarRespuestaPoblacion(
                     documentos,
                     n);
+            }
+
+            // --------------------------------------------------------
+            // UBICACIÓN
+            // --------------------------------------------------------
 
             if (EsConsultaUbicacion(n))
+            {
                 return BuscarRespuestaUbicacion(
                     documentos,
                     n);
+            }
+
+            // --------------------------------------------------------
+            // DEFINICIÓN
+            // --------------------------------------------------------
 
             if (EsConsultaDefinicion(n))
+            {
                 return BuscarRespuestaDefinicion(
                     documentos,
                     n);
+            }
+
+            // --------------------------------------------------------
+            // FECHA
+            // --------------------------------------------------------
 
             if (EsConsultaFecha(n))
+            {
                 return BuscarRespuestaFecha(
                     documentos,
                     n);
+            }
 
             return null;
         }
@@ -906,7 +968,8 @@ namespace CorrientesIA.Api.Services
             var oracion =
                 BuscarOracionUbicacion(
                     mejor.Contenido);
-
+            Console.WriteLine(
+    $"[UBICACION-DOC] {mejor.Titulo}");
             if (string.IsNullOrWhiteSpace(oracion))
             {
                 oracion =
@@ -920,63 +983,149 @@ namespace CorrientesIA.Api.Services
         }
 
         private static string? BuscarOracionUbicacion(
-            string contenido)
+    string contenido)
+{
+    var oraciones = SepararOraciones(contenido);
+
+    if (oraciones.Count == 0)
+        return null;
+
+    string? mejor = null;
+    int mejorPuntaje = 0;
+
+    foreach (var oracion in oraciones)
+    {
+        var norm = NormalizarTexto(oracion);
+        int puntaje = 0;
+        if (ContieneFrase(norm, "en la provincia de corrientes"))
+    puntaje += 200;
+
+if (ContieneFrase(norm, "provincia de corrientes"))
+    puntaje += 180;
+
+if (ContieneFrase(norm, "en el nordeste de argentina"))
+    puntaje += 150;
+
+if (ContieneFrase(norm, "en el noreste de argentina"))
+    puntaje += 150;
+
+        // ------------------------------------------------------------
+        // FORMAS DIRECTAS DE UBICACIÓN
+        // ------------------------------------------------------------
+
+        if (ContieneFrase(norm, "se encuentra"))
+            puntaje += 80;
+
+        if (ContieneFrase(norm, "se encuentran"))
+            puntaje += 80;
+
+        if (ContieneFrase(norm, "se ubica"))
+            puntaje += 80;
+
+        if (ContieneFrase(norm, "se ubican"))
+            puntaje += 80;
+
+        if (ContieneFrase(norm, "esta ubicado"))
+            puntaje += 75;
+
+        if (ContieneFrase(norm, "esta ubicada"))
+            puntaje += 75;
+
+        if (ContieneFrase(norm, "situado en"))
+            puntaje += 75;
+
+        if (ContieneFrase(norm, "situada en"))
+            puntaje += 75;
+
+        if (ContieneFrase(norm, "situados en"))
+            puntaje += 75;
+
+        if (ContieneFrase(norm, "situadas en"))
+            puntaje += 75;
+
+        // ------------------------------------------------------------
+        // REFERENCIAS GEOGRÁFICAS
+        // ------------------------------------------------------------
+
+        if (ContieneFrase(norm, "en la provincia"))
+            puntaje += 55;
+
+        if (ContieneFrase(norm, "en el departamento"))
+            puntaje += 45;
+
+        if (ContieneFrase(norm, "provincia de corrientes"))
+            puntaje += 50;
+
+        if (ContieneFrase(norm, "corrientes"))
+            puntaje += 20;
+
+        if (ContieneFrase(norm, "argentina"))
+            puntaje += 15;
+
+        if (ContieneFrase(norm, "nordeste"))
+            puntaje += 25;
+
+        if (ContieneFrase(norm, "noreste"))
+            puntaje += 25;
+
+        if (ContieneFrase(norm, "norte"))
+            puntaje += 15;
+
+        if (ContieneFrase(norm, "sur"))
+            puntaje += 15;
+
+        if (ContieneFrase(norm, "este"))
+            puntaje += 10;
+
+        if (ContieneFrase(norm, "oeste"))
+            puntaje += 10;
+
+        // ------------------------------------------------------------
+        // EXPRESIONES GEOGRÁFICAS
+        // ------------------------------------------------------------
+
+        if (ContieneFrase(norm, "en el nordeste de"))
+            puntaje += 40;
+
+        if (ContieneFrase(norm, "en el noreste de"))
+            puntaje += 40;
+
+        if (ContieneFrase(norm, "al norte de"))
+            puntaje += 30;
+
+        if (ContieneFrase(norm, "al sur de"))
+            puntaje += 30;
+
+        if (ContieneFrase(norm, "cerca de"))
+            puntaje += 20;
+
+        // ------------------------------------------------------------
+        // EVITAR FRASES QUE SON PRINCIPALMENTE DESCRIPTIVAS
+        // ------------------------------------------------------------
+
+        if (ContieneFrase(norm, "humedal"))
+            puntaje -= 10;
+
+        if (ContieneFrase(norm, "fauna"))
+            puntaje -= 10;
+
+        if (ContieneFrase(norm, "flora"))
+            puntaje -= 10;
+
+        if (ContieneFrase(norm, "especies"))
+            puntaje -= 10;
+
+        Console.WriteLine(
+    $"[UBICACION] {puntaje} => {oracion}");
+        if (puntaje > mejorPuntaje)
         {
-            string? mejor = null;
-            int mejorScore = 0;
-
-            foreach (var oracion in
-                SepararOraciones(contenido))
-            {
-                var norm =
-                    NormalizarTexto(oracion);
-
-                int score = 0;
-
-                if (ContieneFrase(
-                    norm,
-                    "ubicado"))
-                {
-                    score += 50;
-                }
-
-                if (ContieneFrase(
-                    norm,
-                    "ubicada"))
-                {
-                    score += 50;
-                }
-
-                if (ContieneFrase(
-                    norm,
-                    "provincia"))
-                {
-                    score += 30;
-                }
-
-                if (ContieneFrase(
-                    norm,
-                    "corrientes"))
-                {
-                    score += 20;
-                }
-
-                if (ContieneFrase(
-                    norm,
-                    "departamento"))
-                {
-                    score += 15;
-                }
-
-                if (score > mejorScore)
-                {
-                    mejorScore = score;
-                    mejor = oracion;
-                }
-            }
-
-            return mejor;
+            mejorPuntaje = puntaje;
+            mejor = oracion;
         }
+    }
+
+    return mejor;
+}
 
         // ============================================================
         // DEFINICIÓN
@@ -1021,12 +1170,25 @@ namespace CorrientesIA.Api.Services
             if (mejor == null)
                 return null;
 
+            // IMPORTANTE:
+            // La oración de definición debe mencionar también
+            // la entidad consultada. Esto evita errores como:
+            //
+            // "¿Qué es el Iberá?"
+            // -> "El carpincho es un roedor herbívoro."
+            //
+            // aunque esa oración esté dentro del mismo documento.
             var oracion =
                 BuscarOracionDefinicion(
-                    mejor.Contenido);
+                    mejor.Contenido,
+                    entidades);
 
             if (string.IsNullOrWhiteSpace(oracion))
             {
+                // Si no encontramos una definición explícita que
+                // mencione la entidad, usamos la primera oración
+                // del documento, que normalmente representa mejor
+                // el tema principal del artículo.
                 oracion =
                     PrimeraOracion(
                         mejor.Contenido);
@@ -1038,27 +1200,94 @@ namespace CorrientesIA.Api.Services
         }
 
         private static string? BuscarOracionDefinicion(
-            string contenido)
-        {
-            foreach (var oracion in
-                SepararOraciones(contenido))
-            {
-                var norm =
-                    NormalizarTexto(oracion);
+    string contenido,
+    IReadOnlyList<string> entidades)
+{
+    if (string.IsNullOrWhiteSpace(contenido) ||
+        entidades.Count == 0)
+    {
+        return null;
+    }
 
-                if (ContieneFrase(
-                        norm,
-                        "es un") ||
-                    ContieneFrase(
-                        norm,
-                        "es una"))
+    string? mejor = null;
+    int mejorPuntaje = 0;
+
+    foreach (var oracion in
+        SepararOraciones(contenido))
+    {
+        var norm =
+            NormalizarTexto(oracion);
+
+        if (!entidades.Any(entidad =>
+                ContieneFrase(norm, entidad)))
+        {
+            continue;
+        }
+
+        int puntaje = 0;
+
+        // La entidad aparece como sujeto al comienzo.
+        foreach (var entidad in entidades)
+        {
+            if (ContieneFrase(norm, entidad))
+            {
+                puntaje += 50;
+
+                if (norm.StartsWith(
+                    entidad + " ",
+                    StringComparison.Ordinal))
                 {
-                    return oracion;
+                    puntaje += 100;
                 }
             }
-
-            return null;
         }
+
+        // Definiciones explícitas.
+        if (ContieneFrase(norm, "se denomina"))
+            puntaje += 120;
+
+        if (ContieneFrase(norm, "se define como"))
+            puntaje += 120;
+
+        if (ContieneFrase(norm, "es un"))
+            puntaje += 80;
+
+        if (ContieneFrase(norm, "es una"))
+            puntaje += 80;
+
+        // Formas típicas de descripción conceptual.
+        if (ContieneFrase(norm, "se trata de"))
+            puntaje += 70;
+
+        if (ContieneFrase(norm, "consiste en"))
+            puntaje += 70;
+
+        // Penalizar oraciones que hablan principalmente
+        // de fauna, turismo o actividades posteriores.
+        if (ContieneFrase(norm, "yaguarete"))
+            puntaje -= 40;
+
+        if (ContieneFrase(norm, "fauna"))
+            puntaje -= 20;
+
+        if (ContieneFrase(norm, "flora"))
+            puntaje -= 20;
+
+        if (ContieneFrase(norm, "turismo"))
+            puntaje -= 20;
+
+        if (ContieneFrase(norm, "visitante"))
+            puntaje -= 20;
+
+        if (puntaje > mejorPuntaje)
+        {
+            mejorPuntaje = puntaje;
+            mejor = oracion;
+        }
+    }
+
+    return mejor;
+}
 
         // ============================================================
         // FECHA
@@ -1392,6 +1621,8 @@ namespace CorrientesIA.Api.Services
                 entidades.Add(entidad);
             }
 
+            // Si hay una entidad específica además de "corrientes",
+            // "corrientes" no aporta precisión al ranking.
             if (entidades.Count > 1)
                 entidades.Remove("corrientes");
 
@@ -1472,8 +1703,8 @@ namespace CorrientesIA.Api.Services
             string textoNorm,
             string frase)
         {
-            if (textoNorm.Length == 0 ||
-                frase.Length == 0)
+            if (string.IsNullOrWhiteSpace(textoNorm) ||
+                string.IsNullOrWhiteSpace(frase))
             {
                 return false;
             }
