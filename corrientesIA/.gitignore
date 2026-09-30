@@ -16,6 +16,9 @@ dist/
 .vscode/*
 !.vscode/extensions.json
 
+# Parches temporales (no van al repo)
+*.patch
+
 # Local development configuration
 **/appsettings.Development.json
 
