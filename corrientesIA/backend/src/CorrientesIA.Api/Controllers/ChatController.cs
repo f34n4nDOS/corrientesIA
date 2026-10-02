@@ -62,25 +62,14 @@ public class ChatController : ControllerBase
         //    pasamos como contexto al modelo GptMini entrenado y dejamos
         //    que él redacte la respuesta con sus propias palabras.
         var contexto =
-            await _grounding.BuscarContextoGeneralAsync(
-                request.Mensaje);
+    await _grounding.BuscarContextoGeneralAsync(
+        request.Mensaje);
 
-        if (contexto is not null)
-        {
-            var prompt =
-                $"Contexto sobre {contexto.Value.Titulo}: {contexto.Value.Contenido}\n" +
-                $"Pregunta: {request.Mensaje}";
-
-            var respuestaGenerada =
-                await _inference.GenerarRespuestaAsync(prompt);
-
-            if (!string.IsNullOrWhiteSpace(respuestaGenerada) &&
-                !respuestaGenerada.StartsWith("(modelo aun no entrenado)", StringComparison.Ordinal) &&
-                !respuestaGenerada.StartsWith("(el modelo no genero texto util", StringComparison.Ordinal))
-            {
-                return Ok(new ChatResponse(respuestaGenerada));
-            }
-        }
+if (contexto is not null)
+{
+    return Ok(new ChatResponse(
+        $"{contexto.Value.Titulo}: {contexto.Value.Contenido}"));
+}
 
         // 4. Ultimo recurso: búsqueda web.
         var resultadosWeb =
