@@ -2406,42 +2406,254 @@ if (consultaNaturaleza)
         // ============================================================
 
         private static string? BuscarRespuestaFecha(
-            IReadOnlyList<DocumentoIndexado> documentos,
-            string n)
-        {
-            var entidades =
-                ObtenerEntidadesConsulta(n);
+    IReadOnlyList<DocumentoIndexado> documentos,
+    string n)
+{
+    var entidades =
+        ObtenerEntidadesConsulta(n);
 
-            if (entidades.Count == 0)
-                return null;
+    if (entidades.Count == 0)
+        return null;
 
-            var mejor =
-                MejorDocumentoPorEntidades(
-                    documentos,
-                    entidades,
-                    pesoContenido: 20,
-                    bonus: d =>
-                        ContieneFecha(
-                            d.ContenidoNorm)
-                            ? 20
-                            : 0);
+    var mejor =
+        MejorDocumentoPorEntidades(
+            documentos,
+            entidades,
+            pesoContenido: 20,
+            bonus: d =>
+                ContieneFecha(d.ContenidoNorm)
+                    ? 20
+                    : 0);
 
-            if (mejor == null)
-                return null;
+    if (mejor == null)
+        return null;
 
-            foreach (var oracion in
-                SepararOraciones(
-                    mejor.Contenido))
-            {
-                if (ContieneFecha(oracion))
+    bool consultaFundacion =
+        EsConsultaFundacion(n);
+
+    bool consultaPrimeraEdicion =
+        ContieneAlguna(
+            n,
+            "primera fiesta",
+            "primera edicion",
+            "primera vez",
+            "primer fiesta",
+            "primer edicion");
+
+    var oraciones =
+        SepararOraciones(mejor.Contenido);
+
+    // ============================================================
+    // CONSULTA DE PRIMERA EDICIÓN / PRIMERA FIESTA
+    // ============================================================
+
+    if (consultaPrimeraEdicion)
+    {
+        var mejorOracionPrimera =
+            oraciones
+                .Where(ContieneFecha)
+                .Select(oracion => new
                 {
-                    return
-                        $"{mejor.Titulo}: {oracion}";
-                }
-            }
+                    Oracion = oracion,
+                    Normalizada =
+                        NormalizarTexto(oracion)
+                })
+                .Select(x => new
+                {
+                    x.Oracion,
 
-            return null;
+                    Puntaje =
+                        (ContieneFrase(
+                            x.Normalizada,
+                            "primera fiesta nacional del chamame")
+                                ? 180
+                                : 0)
+                        +
+                        (ContieneFrase(
+                            x.Normalizada,
+                            "primera fiesta")
+                                ? 120
+                                : 0)
+                        +
+                        (ContieneFrase(
+                            x.Normalizada,
+                            "primera edicion")
+                                ? 160
+                                : 0)
+                        +
+                        (ContieneFrase(
+                            x.Normalizada,
+                            "primera vez")
+                                ? 140
+                                : 0)
+                        +
+                        (ContieneFrase(
+                            x.Normalizada,
+                            "se realizo por primera vez")
+                                ? 180
+                                : 0)
+                        +
+                        (ContieneFrase(
+                            x.Normalizada,
+                            "tuvo lugar")
+                                ? 80
+                                : 0)
+                        +
+                        (ContieneFrase(
+                            x.Normalizada,
+                            "se realizo")
+                                ? 70
+                                : 0)
+                        +
+                        (ContieneFrase(
+                            x.Normalizada,
+                            "fiesta nacional del chamame")
+                                ? 80
+                                : 0)
+                        +
+                        (x.Normalizada.Contains(
+                            NormalizarTexto(
+                                entidades[0]))
+                                ? 60
+                                : 0)
+                })
+                .Where(x => x.Puntaje >= 100)
+                .OrderByDescending(
+                    x => x.Puntaje)
+                .FirstOrDefault();
+
+        if (mejorOracionPrimera != null)
+        {
+            return
+                $"{mejor.Titulo}: " +
+                $"{mejorOracionPrimera.Oracion}";
         }
+
+        // El corpus no contiene una evidencia
+        // suficiente sobre la primera edición.
+        return null;
+    }
+
+    // ============================================================
+    // CONSULTA DE FUNDACIÓN / CREACIÓN / ORIGEN
+    // ============================================================
+
+    if (consultaFundacion)
+    {
+        var mejorOracion =
+            oraciones
+                .Where(ContieneFecha)
+                .Select(oracion => new
+                {
+                    Oracion = oracion,
+                    Normalizada =
+                        NormalizarTexto(oracion)
+                })
+                .Select(x => new
+                {
+                    x.Oracion,
+
+                    Puntaje =
+                        (ContieneFrase(
+                            x.Normalizada,
+                            "se fundo")
+                                ? 120
+                                : 0)
+                        +
+                        (ContieneFrase(
+                            x.Normalizada,
+                            "fue fundada")
+                                ? 120
+                                : 0)
+                        +
+                        (ContieneFrase(
+                            x.Normalizada,
+                            "fue fundado")
+                                ? 120
+                                : 0)
+                        +
+                        (ContieneFrase(
+                            x.Normalizada,
+                            "fundada oficialmente")
+                                ? 110
+                                : 0)
+                        +
+                        (ContieneFrase(
+                            x.Normalizada,
+                            "fundado oficialmente")
+                                ? 110
+                                : 0)
+                        +
+                        (ContieneFrase(
+                            x.Normalizada,
+                            "fundacion")
+                                ? 100
+                                : 0)
+                        +
+                        (ContieneFrase(
+                            x.Normalizada,
+                            "origen")
+                                ? 70
+                                : 0)
+                        +
+                        (ContieneFrase(
+                            x.Normalizada,
+                            "se creo")
+                                ? 90
+                                : 0)
+                        +
+                        (ContieneFrase(
+                            x.Normalizada,
+                            "fue creada")
+                                ? 90
+                                : 0)
+                        +
+                        (ContieneFrase(
+                            x.Normalizada,
+                            "fue creado")
+                                ? 90
+                                : 0)
+                        +
+                        (x.Normalizada.Contains(
+                            NormalizarTexto(
+                                entidades[0]))
+                                ? 60
+                                : 0)
+                })
+                .OrderByDescending(
+                    x => x.Puntaje)
+                .FirstOrDefault();
+
+        if (mejorOracion != null &&
+            mejorOracion.Puntaje >= 70)
+        {
+            return
+                $"{mejor.Titulo}: " +
+                $"{mejorOracion.Oracion}";
+        }
+
+        // La consulta pide específicamente
+        // fundación, creación u origen.
+        // Si el corpus no contiene esa información,
+        // NO devolver una fecha cualquiera.
+        return null;
+    }
+
+    // ============================================================
+    // FECHA GENERAL
+    // ============================================================
+
+    foreach (var oracion in oraciones)
+    {
+        if (ContieneFecha(oracion))
+        {
+            return
+                $"{mejor.Titulo}: {oracion}";
+        }
+    }
+
+    return null;
+}
 
         // ============================================================
         // RANKING
@@ -2690,6 +2902,23 @@ if (consultaNaturaleza)
                 "fecha",
                 "en que ano");
 
+        private static bool EsConsultaFundacion(string n)
+        {
+            return
+                ContieneFrase(n, "cuando se fundo") ||
+                ContieneFrase(n, "cuando fue fundado") ||
+                ContieneFrase(n, "cuando fue fundada") ||
+                ContieneFrase(n, "cuando se fundo oficialmente") ||
+                ContieneFrase(n, "fecha de fundacion") ||
+                ContieneFrase(n, "ano de fundacion") ||
+                ContieneFrase(n, "anio de fundacion") ||
+                ContieneFrase(n, "cuando se creo") ||
+                ContieneFrase(n, "se creo") ||
+                ContieneFrase(n, "cuando fue creado") ||
+                ContieneFrase(n, "cuando fue creada") ||
+                ContieneFrase(n, "origen de");
+             
+        }
         private static bool EsConsultaDiferenciaCiudadProvincia(
             string n) =>
             ContieneFrase(
